@@ -1,0 +1,26 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="CommandLineParser" Version="2.9.1" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.12" />
+    <PackageReference Include="Microsoft.VisualStudio.Shared.VSCodeDebugProtocol" Version="17.2.60629.1" />
+    <PackageReference Include="ModelContextProtocol" Version="2.2.0" />
+  </ItemGroup>
+
+  <!--
+    X16D isn't bundled by this project's build - locally it's pointed to via config
+    (the X16D_PATH env var, or the "x16d" command line option; see Properties/launchSettings.json)
+    so it can still be stepped into from Visual Studio without a copy step getting in the way.
+    CI is responsible for producing a bundled artifact (see Program.cs's "x16d/X16D.exe next
+    to us" fallback).
+  -->
+
+</Project>

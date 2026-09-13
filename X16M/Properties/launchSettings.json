@@ -1,0 +1,26 @@
+{
+  "profiles": {
+    "X16M (Debug X16D)": {
+      "commandName": "Project",
+      "workingDirectory": ".",
+      "environmentVariables": {
+        "X16D_PATH": "..\\..\\BitMagic.X16Debugger\\X16D\\bin\\Debug\\net10.0\\X16D.exe"
+      }
+    },
+    "X16M (Release X16D)": {
+      "commandName": "Project",
+      "workingDirectory": ".",
+      "environmentVariables": {
+        "X16D_PATH": "..\\..\\BitMagic.X16Debugger\\X16D\\bin\\Release\\net10.0\\X16D.exe"
+      }
+    },
+    "X16M (attach to running X16D)": {
+      "commandName": "Project",
+      "workingDirectory": ".",
+      "environmentVariables": {
+        "X16D_HOST": "localhost",
+        "X16D_PORT": "2563"
+      }
+    }
+  }
+}

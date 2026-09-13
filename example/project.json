@@ -1,0 +1,8 @@
+{
+  "source": "main.bmasm",
+  "outputFolder": "out",
+  "compileOptions": {
+    "binFolder": "bin",
+    "rebuild": true
+  }
+}

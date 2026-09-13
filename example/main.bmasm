@@ -1,0 +1,16 @@
+import BM="bm.bmasm";
+
+BM.X16Header();
+
+.constvar byte counter $02
+
+    lda #0
+    sta counter
+
+.loop:
+    inc counter
+    lda counter
+    cmp #10
+    bne loop
+
+    stp
