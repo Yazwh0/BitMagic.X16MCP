@@ -47,7 +47,7 @@ public sealed class DapSession : IDisposable
     public StoppedEvent? LastStop { get; private set; }
     public bool Terminated { get; private set; }
 
-    public void Launch(string projectPath, string? workingDirectory = null)
+    public async Task<StopOutcome> Launch(string projectPath, string? workingDirectory = null)
     {
         lock (_gate)
         {
@@ -101,8 +101,14 @@ public sealed class DapSession : IDisposable
                 },
             };
             _host.SendRequestSync(launchRequest);
-            _host.SendRequestSync(new ConfigurationDoneRequest());
         }
+
+        // configurationDone is what tells X16D to actually start the target running (the
+        // project's StartStepping default means it should immediately hit an initial stop).
+        // Without waiting for that stop here, callers would race the emulator's own speed to
+        // get set_breakpoints in before it ran arbitrarily far - fatal for a target that reaches
+        // its own end in a handful of instructions, like the bundled example.
+        return await SendAndWaitForStop(() => _host!.SendRequestSync(new ConfigurationDoneRequest()), DefaultTimeout);
     }
 
     private (Stream input, Stream output) StartProcess(X16DConnection.Spawn spawn, string? workingDirectory)

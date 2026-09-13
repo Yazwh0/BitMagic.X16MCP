@@ -27,7 +27,7 @@ public static class ExecutionTools
     public static async Task<string> StepOut(DapSession session, int threadId = 1)
         => Describe(await session.StepOutAsync(threadId));
 
-    private static string Describe(StopOutcome outcome)
+    internal static string Describe(StopOutcome outcome)
     {
         if (outcome.Terminated || outcome.Stopped is null)
             return "Target terminated.";
