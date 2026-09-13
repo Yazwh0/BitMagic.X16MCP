@@ -29,6 +29,9 @@ public static class ExecutionTools
 
     internal static string Describe(StopOutcome outcome)
     {
+        if (outcome.StillRunning)
+            return "Still running - no stop observed yet. Set breakpoints now if you haven't, then call continue_execution (or step) to wait for the next one.";
+
         if (outcome.Terminated || outcome.Stopped is null)
             return "Target terminated.";
 

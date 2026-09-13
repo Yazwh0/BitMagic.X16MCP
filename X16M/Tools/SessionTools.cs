@@ -8,13 +8,19 @@ namespace X16M.Tools;
 public static class SessionTools
 {
     [McpServerTool(Name = "launch_project", ReadOnly = false, Destructive = true, Idempotent = false)]
-    [Description("Launches an X16 debug session against a BitMagic project (a .json project file, or a .bmasm source file directly). Spawns X16D, compiles the project, and waits for its initial stop before returning, so breakpoints set immediately afterward are guaranteed to be in place before the target runs any further.")]
+    [Description("Launches an X16 debug session against a BitMagic project (a .json project file, or a .bmasm source file directly). Strongly prefer passing breakpoints here rather than calling set_breakpoints afterward: some targets run to completion in well under a second once launched, faster than a separate follow-up tool call can land, so breakpoints given here are queued immediately behind the launch request itself (the same way VS Code's own DAP client does it) instead of racing the target's own execution speed.")]
     public static async Task<string> LaunchProject(
         DapSession session,
-        [Description("Path to the project's .json file (or a .bmasm file) to launch.")] string projectPath)
+        [Description("Path to the project's .json file (or a .bmasm file) to launch.")] string projectPath,
+        [Description("Breakpoints to set before the target starts running. Strongly recommended over a follow-up set_breakpoints call - see this tool's own description for why.")] BreakpointSpec[]? breakpoints = null)
     {
-        var outcome = await session.Launch(projectPath);
-        return $"Launched. {ExecutionTools.Describe(outcome)}";
+        var outcome = await session.Launch(projectPath, breakpoints);
+
+        var result = $"Launched. {ExecutionTools.Describe(outcome.Stop)}";
+        if (outcome.InitialBreakpoints.Count > 0)
+            result += Environment.NewLine + BreakpointTools.Summarize(outcome.InitialBreakpoints, unverifiedSuffix: " - X16D verifies a breakpoint once its file actually loads, which may not have happened yet; use get_breakpoints to check again later");
+
+        return result;
     }
 
     [McpServerTool(Name = "disconnect", ReadOnly = false, Destructive = true, Idempotent = true)]

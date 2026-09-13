@@ -7,8 +7,23 @@ using Thread = System.Threading.Thread;
 
 namespace X16M.Dap;
 
-/// <summary>Outcome of waiting for the target to stop after a continue/step request.</summary>
-public sealed record StopOutcome(bool Terminated, StoppedEvent? Stopped);
+/// <summary>
+/// Outcome of waiting for the target to stop after a continue/step/launch request.
+/// <see cref="Terminated"/> false and <see cref="Stopped"/> null together mean "still running,
+/// no stop observed within the wait window" - only possible from <see cref="DapSession.Launch"/>,
+/// whose initial wait is short and non-fatal on timeout (some targets never produce an early
+/// stop at all, and an agent still needs a chance to set breakpoints promptly either way).
+/// </summary>
+public sealed record StopOutcome(bool Terminated, StoppedEvent? Stopped)
+{
+    public bool StillRunning => !Terminated && Stopped is null;
+}
+
+/// <summary>One file's worth of breakpoints to request, e.g. as part of <see cref="DapSession.Launch"/>.</summary>
+public sealed record BreakpointSpec(string File, IReadOnlyList<int> Lines);
+
+/// <summary>Result of <see cref="DapSession.Launch"/>: the initial stop, plus how any breakpoints requested alongside it came back.</summary>
+public sealed record LaunchOutcome(StopOutcome Stop, IReadOnlyList<Breakpoint> InitialBreakpoints);
 
 /// <summary>
 /// Speaks DAP to X16D via <see cref="DebugProtocolHost"/>, exactly as VS Code would - either by
@@ -19,6 +34,12 @@ public sealed record StopOutcome(bool Terminated, StoppedEvent? Stopped);
 public sealed class DapSession : IDisposable
 {
     private static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(30);
+
+    // Deliberately short and non-fatal: some targets never produce an early stop at all (no
+    // StartStepping-style pause), and a caller still needs launch_project to return promptly so
+    // it can set breakpoints before the target runs further - not block for up to 30s only to
+    // then get an error instead of a usable session.
+    private static readonly TimeSpan LaunchInitialStopTimeout = TimeSpan.FromSeconds(3);
 
     private readonly X16DConnection _connection;
     private readonly object _gate = new();
@@ -38,6 +59,17 @@ public sealed class DapSession : IDisposable
     private bool _active;
     private string? _projectDirectory;
 
+    // Latest known verification state per breakpoint id, kept current by OnBreakpointEvent so a
+    // caller can see whether a breakpoint has since become verified without re-sending
+    // set_breakpoints.
+    private readonly Dictionary<int, Breakpoint> _breakpointsById = new();
+
+    // A live MCP session's stderr isn't something a user can easily get to, so DAP traffic is
+    // also written to a log file next to the executable (not the process's working directory,
+    // which callers don't control) - overwritten fresh on each Launch.
+    private static readonly string LogPath = Path.Combine(AppContext.BaseDirectory, "x16m-dap.log");
+    private StreamWriter? _logWriter;
+
     public DapSession(X16DConnection connection)
     {
         _connection = connection;
@@ -47,8 +79,11 @@ public sealed class DapSession : IDisposable
     public StoppedEvent? LastStop { get; private set; }
     public bool Terminated { get; private set; }
 
-    public async Task<StopOutcome> Launch(string projectPath, string? workingDirectory = null)
+    public async Task<LaunchOutcome> Launch(string projectPath, IReadOnlyList<BreakpointSpec>? initialBreakpoints = null, string? workingDirectory = null)
     {
+        var launchCompletion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var initialBreakpointResults = new List<Breakpoint>();
+
         lock (_gate)
         {
             if (IsActive)
@@ -56,6 +91,13 @@ public sealed class DapSession : IDisposable
 
             if (!File.Exists(projectPath))
                 throw new FileNotFoundException($"Project file not found at '{projectPath}'.");
+
+            _logWriter?.Dispose();
+            // Appended, not truncated: a live testing session often launches more than once
+            // (retrying after a failure), and overwriting on each Launch was destroying the
+            // very history needed to diagnose the previous attempt.
+            _logWriter = new StreamWriter(LogPath, append: true) { AutoFlush = true };
+            Log($"=== Launch: {projectPath} ===");
 
             var (input, output) = _connection switch
             {
@@ -69,9 +111,24 @@ public sealed class DapSession : IDisposable
             // RegisterEventType calls below, so register nothing by default and handle
             // everything ourselves.
             _host = new DebugProtocolHost(input, output, registerStandardHandlers: false);
+
+            // Raw DAP wire traffic, both directions - the same diagnostic hook X16Debug.cs uses
+            // on itself (its own #if SHOWDAP block). A live MCP session's stderr isn't visible
+            // to a user, so this goes to LogPath (see its declaration) instead/as well.
+            _host.LogMessage += (_, e) => Log($"[DAP:{e.Category}] {e.Message}");
+
             _host.RegisterEventType<StoppedEvent>(OnStopped);
             _host.RegisterEventType<TerminatedEvent>(OnTerminated);
             _host.RegisterEventType<ExitedEvent>(_ => OnTerminated(new TerminatedEvent()));
+            _host.RegisterEventType<OutputEvent>(e => Log($"[X16D:{e.Category}] {e.Output?.TrimEnd()}"));
+
+            // X16D re-resolves and re-verifies breakpoints asynchronously once a file's
+            // debugger info actually loads (see "Loading debugger info for '...'" in its own
+            // log) - a breakpoint set before that point legitimately comes back unverified from
+            // set_breakpoints, then flips to verified via this event once the code is in memory.
+            // Track the latest known state per breakpoint id so callers can see the settled
+            // status instead of just the immediate snapshot.
+            _host.RegisterEventType<BreakpointEvent>(OnBreakpointEvent);
 
             _pumpThread = new Thread(() =>
             {
@@ -100,15 +157,47 @@ public sealed class DapSession : IDisposable
                     ["cwd"] = _projectDirectory,
                 },
             };
-            _host.SendRequestSync(launchRequest);
+
+            // launch's own handling compiles the project synchronously, so its response can be
+            // seconds away - a captured VS Code session confirms X16D still processes other
+            // requests concurrently while that's in flight, and VS Code exploits exactly that by
+            // pipelining setBreakpoints immediately behind launch rather than waiting for its
+            // response first. SendRequestSync would block until launch's own response arrives,
+            // defeating that; the async SendRequest just queues the write and returns, letting
+            // setBreakpoints (below) go out right behind it on the wire, same as VS Code.
+            _host.SendRequest<LaunchArguments>(
+                launchRequest,
+                completionFunc: _ => launchCompletion.TrySetResult(),
+                errorFunc: (_, ex) => launchCompletion.TrySetException(ex));
+
+            if (initialBreakpoints is not null)
+            {
+                foreach (var spec in initialBreakpoints)
+                    initialBreakpointResults.AddRange(SendSetBreakpoints(spec.File, spec.Lines));
+            }
         }
 
-        // configurationDone is what tells X16D to actually start the target running (the
-        // project's StartStepping default means it should immediately hit an initial stop).
-        // Without waiting for that stop here, callers would race the emulator's own speed to
-        // get set_breakpoints in before it ran arbitrarily far - fatal for a target that reaches
-        // its own end in a handful of instructions, like the bundled example.
-        return await SendAndWaitForStop(() => _host!.SendRequestSync(new ConfigurationDoneRequest()), DefaultTimeout);
+        await launchCompletion.Task;
+
+        // VS Code never sends configurationDone (X16D's initialize response doesn't advertise
+        // support for it, and HandleConfigurationDoneRequest is a pure no-op) - but VS Code also
+        // doesn't need any further signal, since its breakpoints are already in place by the
+        // time launch finishes (see above). configurationDone is still sent here as a way to
+        // wait briefly for a stop in case the target happens to produce an early one anyway (e.g.
+        // an early StartStepping-style pause). Not every target does, though, and this wait must
+        // never block launch_project for long when one doesn't come - so a timeout here means
+        // "still running", not an error to propagate.
+        StopOutcome stop;
+        try
+        {
+            stop = await SendAndWaitForStop(() => _host!.SendRequestSync(new ConfigurationDoneRequest()), LaunchInitialStopTimeout);
+        }
+        catch (TimeoutException)
+        {
+            stop = new StopOutcome(Terminated: false, Stopped: null);
+        }
+
+        return new LaunchOutcome(stop, initialBreakpointResults);
     }
 
     private (Stream input, Stream output) StartProcess(X16DConnection.Spawn spawn, string? workingDirectory)
@@ -127,7 +216,22 @@ public sealed class DapSession : IDisposable
             WorkingDirectory = workingDirectory ?? Path.GetDirectoryName(Path.GetFullPath(spawn.ExecutablePath)) ?? Environment.CurrentDirectory,
         };
 
-        _process = Process.Start(psi) ?? throw new InvalidOperationException("Failed to start X16D.");
+        var process = Process.Start(psi) ?? throw new InvalidOperationException("Failed to start X16D.");
+        _process = process;
+
+        // If X16D dies (crash, killed externally, anything short of a clean DAP terminate/exit)
+        // nothing would otherwise resolve a pending continue/step/launch wait, leaving the
+        // caller hanging for the full timeout instead of failing immediately. Captures the local
+        // rather than the _process field, which Shutdown() may already have nulled out by the
+        // time this fires.
+        process.EnableRaisingEvents = true;
+        process.Exited += (_, _) =>
+        {
+            var exitCode = -1;
+            try { exitCode = process.ExitCode; } catch { /* ignore */ }
+            Log($"[X16D] process exited unexpectedly (code {exitCode})");
+            OnTerminated(new TerminatedEvent());
+        };
 
         // Drain stderr so X16D's own diagnostics can't fill the pipe and stall it; never let
         // anything from the child reach our stdout, since that's the MCP JSON-RPC channel.
@@ -150,7 +254,15 @@ public sealed class DapSession : IDisposable
     public IReadOnlyList<Breakpoint> SetBreakpoints(string file, IReadOnlyList<int> lines)
     {
         RequireActive();
+        return SendSetBreakpoints(file, lines);
+    }
 
+    // Shared by SetBreakpoints and Launch(initialBreakpoints:) - the latter calls this directly
+    // (bypassing RequireActive, which would already be satisfied) immediately after sending
+    // launch, before configurationDone, so the breakpoint is queued as close to VS Code's own
+    // pipelined launch->setBreakpoints sequence as possible.
+    private IReadOnlyList<Breakpoint> SendSetBreakpoints(string file, IReadOnlyList<int> lines)
+    {
         // A relative path means nothing resolved against this process's own working directory,
         // which the caller has no visibility into or control over - resolve it against the
         // launched project's directory instead, which is what a caller actually means by
@@ -164,8 +276,23 @@ public sealed class DapSession : IDisposable
 
         var request = new SetBreakpointsRequest(source) { Breakpoints = breakpoints };
         var response = _host!.SendRequestSync(request);
+
+        foreach (var breakpoint in response.Breakpoints)
+        {
+            if (breakpoint.Id.HasValue)
+                _breakpointsById[breakpoint.Id.Value] = breakpoint;
+        }
+
         return response.Breakpoints;
     }
+
+    /// <summary>
+    /// Current known state of every breakpoint set so far, kept up to date by BreakpointEvents -
+    /// use this to see whether a breakpoint that came back unverified from set_breakpoints has
+    /// since become verified (X16D verifies a breakpoint once the file it belongs to actually
+    /// loads, which can happen well after set_breakpoints returns).
+    /// </summary>
+    public IReadOnlyList<Breakpoint> GetKnownBreakpoints() => _breakpointsById.Values.ToList();
 
     public Task<StopOutcome> ContinueAsync(int threadId = 1, TimeSpan? timeout = null)
         => SendAndWaitForStop(() => _host!.SendRequestSync(new ContinueRequest(threadId)), timeout);
@@ -269,11 +396,29 @@ public sealed class DapSession : IDisposable
         _pendingStop?.TrySetResult(new StopOutcome(true, null));
     }
 
-    private static async Task DrainStreamAsync(StreamReader reader)
+    private void OnBreakpointEvent(BreakpointEvent e)
+    {
+        var breakpoint = e.Breakpoint;
+        if (breakpoint.Id.HasValue)
+            _breakpointsById[breakpoint.Id.Value] = breakpoint;
+
+        Log($"[X16D:breakpoint] {e.Reason} - line {breakpoint.Line}: {(breakpoint.Verified ? "verified" : "NOT verified")}" +
+            $"{(string.IsNullOrEmpty(breakpoint.Message) ? "" : $" ({breakpoint.Message})")}");
+    }
+
+    private async Task DrainStreamAsync(StreamReader reader)
     {
         string? line;
         while ((line = await reader.ReadLineAsync()) != null)
-            Console.Error.WriteLine($"[X16D] {line}");
+            Log($"[X16D] {line}");
+    }
+
+    // Console.Error is still written to as well - handy when running X16M interactively (e.g.
+    // spawned directly under a raw JSON-RPC harness) rather than as a backgrounded MCP process.
+    private void Log(string message)
+    {
+        Console.Error.WriteLine(message);
+        try { _logWriter?.WriteLine($"{DateTime.Now:HH:mm:ss.fff} {message}"); } catch { /* ignore */ }
     }
 
     private void RequireActive()
@@ -310,5 +455,6 @@ public sealed class DapSession : IDisposable
         }
 
         _stepLock.Dispose();
+        _logWriter?.Dispose();
     }
 }
