@@ -11,10 +11,13 @@ public static class BreakpointTools
     [Description("Sets the full set of source breakpoints for one file, replacing any previously set breakpoints in that file (matches DAP's setBreakpoints semantics).")]
     public static string SetBreakpoints(
         DapSession session,
-        [Description("Path to the source file the breakpoints belong to.")] string file,
+        [Description("Path to the source file the breakpoints belong to. A relative path resolves against the launched project's own directory.")] string file,
         [Description("1-based source line numbers to set breakpoints on.")] int[] lines)
     {
         var breakpoints = session.SetBreakpoints(file, lines);
+
+        if (breakpoints.Count == 0)
+            return $"No breakpoints were set. Check '{file}' matches a source file in the launched project.";
 
         var summary = breakpoints.Select(b => b.Verified
             ? $"line {b.Line}: verified"

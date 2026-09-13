@@ -36,6 +36,7 @@ public sealed class DapSession : IDisposable
     private Thread? _pumpThread;
     private TaskCompletionSource<StopOutcome>? _pendingStop;
     private bool _active;
+    private string? _projectDirectory;
 
     public DapSession(X16DConnection connection)
     {
@@ -86,6 +87,7 @@ public sealed class DapSession : IDisposable
             _active = true;
             Terminated = false;
             LastStop = null;
+            _projectDirectory = Path.GetDirectoryName(Path.GetFullPath(projectPath)) ?? "";
 
             _host.SendRequestSync(new InitializeRequest("x16m"));
 
@@ -95,7 +97,7 @@ public sealed class DapSession : IDisposable
                 ConfigurationProperties = new Dictionary<string, JToken?>
                 {
                     ["program"] = projectPath,
-                    ["cwd"] = Path.GetDirectoryName(Path.GetFullPath(projectPath)) ?? "",
+                    ["cwd"] = _projectDirectory,
                 },
             };
             _host.SendRequestSync(launchRequest);
@@ -143,7 +145,14 @@ public sealed class DapSession : IDisposable
     {
         RequireActive();
 
-        var fullPath = Path.GetFullPath(file);
+        // A relative path means nothing resolved against this process's own working directory,
+        // which the caller has no visibility into or control over - resolve it against the
+        // launched project's directory instead, which is what a caller actually means by
+        // "this source file".
+        var basePath = Path.IsPathRooted(file) || string.IsNullOrEmpty(_projectDirectory)
+            ? file
+            : Path.Combine(_projectDirectory, file);
+        var fullPath = Path.GetFullPath(basePath);
         var source = new Source { Name = Path.GetFileName(fullPath), Path = fullPath };
         var breakpoints = lines.Select(l => new SourceBreakpoint(l)).ToList();
 

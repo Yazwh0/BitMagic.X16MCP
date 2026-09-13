@@ -4,6 +4,7 @@ BM.X16Header();
 
 .constvar byte counter $02
 
+    sei
     lda #0
     sta counter
 
@@ -14,3 +15,4 @@ BM.X16Header();
     bne loop
 
     stp
+    brk
