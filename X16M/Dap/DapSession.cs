@@ -23,6 +23,13 @@ public sealed class DapSession : IDisposable
     private readonly X16DConnection _connection;
     private readonly object _gate = new();
 
+    // Serializes continue/step calls: DAP only supports one outstanding execution-control
+    // operation at a time. Without this, two overlapping calls (MCP can dispatch tool calls
+    // concurrently) would both write _pendingStop, the second clobbering the first's
+    // TaskCompletionSource - the target then receives more continue/step requests than the
+    // caller accounted for, and the first call's result is silently lost.
+    private readonly SemaphoreSlim _stepLock = new(1, 1);
+
     private Process? _process;
     private TcpClient? _tcpClient;
     private DebugProtocolHost? _host;
@@ -201,19 +208,29 @@ public sealed class DapSession : IDisposable
         }
     }
 
-    private Task<StopOutcome> SendAndWaitForStop(Action sendRequest, TimeSpan? timeout)
+    private async Task<StopOutcome> SendAndWaitForStop(Action sendRequest, TimeSpan? timeout)
     {
-        RequireActive();
+        // Only one continue/step can be in flight at a time - see _stepLock's declaration for
+        // why. A second call simply waits its turn rather than racing on _pendingStop.
+        await _stepLock.WaitAsync();
+        try
+        {
+            RequireActive();
 
-        if (Terminated)
-            throw new InvalidOperationException("The target has already terminated. Call launch_project to start a new session.");
+            if (Terminated)
+                throw new InvalidOperationException("The target has already terminated. Call launch_project to start a new session.");
 
-        var tcs = new TaskCompletionSource<StopOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
-        _pendingStop = tcs;
+            var tcs = new TaskCompletionSource<StopOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _pendingStop = tcs;
 
-        sendRequest();
+            sendRequest();
 
-        return WaitWithTimeout(tcs.Task, timeout ?? DefaultTimeout);
+            return await WaitWithTimeout(tcs.Task, timeout ?? DefaultTimeout);
+        }
+        finally
+        {
+            _stepLock.Release();
+        }
     }
 
     private static async Task<StopOutcome> WaitWithTimeout(Task<StopOutcome> waitTask, TimeSpan timeout)
@@ -276,5 +293,7 @@ public sealed class DapSession : IDisposable
         {
             Shutdown();
         }
+
+        _stepLock.Dispose();
     }
 }

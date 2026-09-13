@@ -68,12 +68,42 @@ natural follow-up once this slice is proven out.
 
 ## Registering with an MCP client
 
-For Claude Code, register X16M with the CLI rather than a project `.mcp.json`: the `--x16d`
-path is machine-specific, so a `local`-scoped registration (kept in your own `~/.claude.json`,
-never checked into the repo) is the better fit:
+For Claude Code, register X16M with the CLI rather than a project `.mcp.json`: any `--x16d`
+path is machine-specific, so a `.mcp.json` checked into a repo (shared with everyone who opens
+it) is the wrong fit. Two scopes are relevant, and the difference matters:
+
+- **`--scope user`**: available from every project, in every session, on this machine. This is
+  the one to reach for unless you have a specific reason not to.
+- **`--scope local`**: only takes effect in sessions launched from the *exact directory* you
+  were standing in when you ran `claude mcp add`. A session started anywhere else, even a fresh
+  restart, won't see it, and `claude mcp list` will still report it as healthy since that check
+  isn't tied to any one session.
+
+Either way the registration lives in your own `~/.claude.json`, never in the repo.
+
+If you've downloaded a release archive (see "Bundling" above), X16D is already bundled inside
+as `x16d/`, so no `--x16d` is needed at all. `claude mcp add` stores the command exactly as
+given, and Claude Code doesn't necessarily launch it from the directory you were standing in
+when you registered it, so the path must be absolute, not `.\X16M.exe` or `./X16M`. From inside
+the extracted folder, expand it to an absolute path with the shell itself:
 
 ```bash
-claude mcp add x16m --scope local -- <path-to-X16M.exe> --x16d <path-to-X16D.exe>
+# Windows (PowerShell)
+claude mcp add x16m --scope user -- "$PWD\X16M.exe"
+
+# Linux
+claude mcp add x16m --scope user -- "$(pwd)/X16M"
+```
+
+If you registered it before and `claude mcp list` shows a relative path, a "Conflicting scopes"
+warning, or the tools aren't showing up despite a full restart, remove the bad entry (or entries,
+if it's registered in more than one scope) and re-add it: `claude mcp remove x16m --scope
+<scope>`, then one of the commands above.
+
+If you built X16M yourself from source instead, point it at your own `X16D` build explicitly:
+
+```bash
+claude mcp add x16m --scope user -- <path-to-X16M.exe> --x16d <path-to-X16D.exe>
 ```
 
 Other MCP clients typically want the equivalent of a `.mcp.json` entry:
@@ -83,7 +113,7 @@ Other MCP clients typically want the equivalent of a `.mcp.json` entry:
   "mcpServers": {
     "x16m": {
       "command": "<path-to-X16M.exe>",
-      "args": ["--x16d", "<path-to-X16D.exe>"]
+      "args": []
     }
   }
 }
