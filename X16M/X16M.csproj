@@ -42,10 +42,12 @@
     <Description>Lets an AI agent debug BitMagic X16 programs: set breakpoints, step through code, and inspect the stack and memory.</Description>
     <RuntimeIdentifiers>win-x64;linux-x64</RuntimeIdentifiers>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>butterfly.jpg</PackageIcon>
   </PropertyGroup>
 
   <ItemGroup>
     <None Include="../README.md" Pack="true" PackagePath="\" />
+    <None Include="icon/butterfly.jpg" Pack="true" PackagePath="\" />
   </ItemGroup>
 
   <ItemGroup Condition="'$(RuntimeIdentifier)' == 'win-x64'">
