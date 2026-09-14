@@ -380,6 +380,18 @@ public sealed class DapSession : IDisposable
         return _host!.SendRequestSync(new ReadMemoryRequest(memoryReference, count));
     }
 
+    public LayerRequestResponse GetLayers()
+    {
+        RequireActive();
+        return _host!.SendRequestSync(new LayerRequest());
+    }
+
+    public SpriteRequestResponse GetSprites()
+    {
+        RequireActive();
+        return _host!.SendRequestSync(new SpriteRequest());
+    }
+
     public void Disconnect()
     {
         lock (_gate)
