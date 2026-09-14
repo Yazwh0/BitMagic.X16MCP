@@ -22,8 +22,8 @@ public sealed record StopOutcome(bool Terminated, StoppedEvent? Stopped)
 /// <summary>One file's worth of breakpoints to request, e.g. as part of <see cref="DapSession.Launch"/>.</summary>
 public sealed record BreakpointSpec(string File, IReadOnlyList<int> Lines);
 
-/// <summary>Result of <see cref="DapSession.Launch"/>: the initial stop, plus how any breakpoints requested alongside it came back.</summary>
-public sealed record LaunchOutcome(StopOutcome Stop, IReadOnlyList<Breakpoint> InitialBreakpoints);
+/// <summary>Result of <see cref="DapSession.Launch"/>, plus a best-effort warning if no ROM looked reachable.</summary>
+public sealed record LaunchOutcome(StopOutcome Stop, IReadOnlyList<Breakpoint> InitialBreakpoints, string? RomWarning);
 
 /// <summary>
 /// Speaks DAP to X16D via <see cref="DebugProtocolHost"/>, exactly as VS Code would - either by
@@ -59,6 +59,9 @@ public sealed class DapSession : IDisposable
     private bool _active;
     private string? _projectDirectory;
 
+    // Last error-severity OutputEvent from X16D, e.g. "*** Rom file not found: rom.bin".
+    private string? _lastErrorOutput;
+
     // Latest known verification state per breakpoint id, kept current by OnBreakpointEvent so a
     // caller can see whether a breakpoint has since become verified without re-sending
     // set_breakpoints.
@@ -83,6 +86,7 @@ public sealed class DapSession : IDisposable
     {
         var launchCompletion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var initialBreakpointResults = new List<Breakpoint>();
+        string? romWarning;
 
         lock (_gate)
         {
@@ -91,6 +95,12 @@ public sealed class DapSession : IDisposable
 
             if (!File.Exists(projectPath))
                 throw new FileNotFoundException($"Project file not found at '{projectPath}'.");
+
+            // Best-effort only (doesn't know project.json-level RomFile/EmulatorDirectory
+            // overrides), so a miss is a warning, not a launch precondition.
+            romWarning = _connection is X16DConnection.Spawn romCheckSpawn
+                ? CheckRomWarning(romCheckSpawn.ExecutablePath)
+                : null;
 
             _logWriter?.Dispose();
             // Appended, not truncated: a live testing session often launches more than once
@@ -120,7 +130,12 @@ public sealed class DapSession : IDisposable
             _host.RegisterEventType<StoppedEvent>(OnStopped);
             _host.RegisterEventType<TerminatedEvent>(OnTerminated);
             _host.RegisterEventType<ExitedEvent>(_ => OnTerminated(new TerminatedEvent()));
-            _host.RegisterEventType<OutputEvent>(e => Log($"[X16D:{e.Category}] {e.Output?.TrimEnd()}"));
+            _host.RegisterEventType<OutputEvent>(e =>
+            {
+                Log($"[X16D:{e.Category}] {e.Output?.TrimEnd()}");
+                if (e.Severity == OutputEvent.SeverityValue.Error && !string.IsNullOrWhiteSpace(e.Output))
+                    _lastErrorOutput = e.Output.TrimEnd();
+            });
 
             // X16D re-resolves and re-verifies breakpoints asynchronously once a file's
             // debugger info actually loads (see "Loading debugger info for '...'" in its own
@@ -144,6 +159,7 @@ public sealed class DapSession : IDisposable
             _active = true;
             Terminated = false;
             LastStop = null;
+            _lastErrorOutput = null;
             _projectDirectory = Path.GetDirectoryName(Path.GetFullPath(projectPath)) ?? "";
 
             _host.SendRequestSync(new InitializeRequest("x16m"));
@@ -177,7 +193,18 @@ public sealed class DapSession : IDisposable
             }
         }
 
-        await launchCompletion.Task;
+        try
+        {
+            await launchCompletion.Task;
+        }
+        catch (Exception ex)
+        {
+            // X16D exiting mid-launch faults this with an OperationCanceledException, which the
+            // MCP SDK reads as "caller cancelled" and answers with silence instead of an error.
+            // Rethrow as a plain exception so it's actually reported.
+            var detail = _lastErrorOutput ?? ex.Message;
+            throw new InvalidOperationException($"X16D exited before completing launch: {detail}");
+        }
 
         // VS Code never sends configurationDone (X16D's initialize response doesn't advertise
         // support for it, and HandleConfigurationDoneRequest is a pure no-op) - but VS Code also
@@ -197,7 +224,24 @@ public sealed class DapSession : IDisposable
             stop = new StopOutcome(Terminated: false, Stopped: null);
         }
 
-        return new LaunchOutcome(stop, initialBreakpointResults);
+        return new LaunchOutcome(stop, initialBreakpointResults, romWarning);
+    }
+
+    private static string? CheckRomWarning(string x16dExecutablePath)
+    {
+        var x16dDirectory = Path.GetDirectoryName(Path.GetFullPath(x16dExecutablePath)) ?? "";
+        if (File.Exists(Path.Combine(x16dDirectory, "rom.bin")))
+            return null;
+
+        var env = Environment.GetEnvironmentVariable("BITMAGIC_ROM");
+        if (!string.IsNullOrWhiteSpace(env) && (File.Exists(env) || File.Exists(Path.Combine(env, "rom.bin"))))
+            return null;
+
+        return "No X16 ROM found next to X16D, and the BITMAGIC_ROM environment variable isn't " +
+               "set to one either - launch will likely fail unless this project points at a ROM " +
+               "some other way. Download a ROM from the official Commander X16 releases and " +
+               "either place it as 'rom.bin' next to X16D, or set BITMAGIC_ROM to its file path " +
+               "(or the folder containing it).";
     }
 
     private (Stream input, Stream output) StartProcess(X16DConnection.Spawn spawn, string? workingDirectory)

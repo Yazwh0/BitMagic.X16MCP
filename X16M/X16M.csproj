@@ -23,4 +23,37 @@
     to us" fallback).
   -->
 
+  <!--
+    Published as a .NET tool with a bundled X16D per RID (see "RuntimeIdentifierPackages" in the
+    resulting nuspec): `dotnet tool install` auto-selects BitMagic.X16M.win-x64 or .linux-x64,
+    each carrying only its own platform's x16d/ payload, so AppContext.BaseDirectory\x16d
+    resolves the same way it does for the zipped release build - no code changes needed here.
+    CI stages the already-built per-OS debugger output into ../x16d-win-x64/ and
+    ../x16d-linux-x64/ (see build-test.yml's "nuget-publish" job) before running `dotnet pack`.
+    These live one level *above* this project directory, not inside it - the SDK's implicit
+    globs (Compile/Content/etc.) scan the whole project directory tree, and X16D's bundle
+    includes loose .cs library sources that would otherwise get swept up and compiled into X16M.
+  -->
+  <PropertyGroup>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>x16m</ToolCommandName>
+    <PackageId>BitMagic.X16M</PackageId>
+    <Title>X16M</Title>
+    <Description>Lets an AI agent debug BitMagic X16 programs: set breakpoints, step through code, and inspect the stack and memory.</Description>
+    <RuntimeIdentifiers>win-x64;linux-x64</RuntimeIdentifiers>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="../README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(RuntimeIdentifier)' == 'win-x64'">
+    <Content Include="../x16d-win-x64/**" Pack="true" PackagePath="tools/$(TargetFramework)/win-x64/x16d/" CopyToOutputDirectory="Never" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(RuntimeIdentifier)' == 'linux-x64'">
+    <Content Include="../x16d-linux-x64/**" Pack="true" PackagePath="tools/$(TargetFramework)/linux-x64/x16d/" CopyToOutputDirectory="Never" />
+  </ItemGroup>
+
 </Project>

@@ -16,7 +16,11 @@ public static class SessionTools
     {
         var outcome = await session.Launch(projectPath, breakpoints);
 
-        var result = $"Launched. {ExecutionTools.Describe(outcome.Stop)}";
+        var result = "";
+        if (outcome.RomWarning is not null)
+            result += outcome.RomWarning + Environment.NewLine;
+
+        result += $"Launched. {ExecutionTools.Describe(outcome.Stop)}";
         if (outcome.InitialBreakpoints.Count > 0)
             result += Environment.NewLine + BreakpointTools.Summarize(outcome.InitialBreakpoints, unverifiedSuffix: " - X16D verifies a breakpoint once its file actually loads, which may not have happened yet; use get_breakpoints to check again later");
 
