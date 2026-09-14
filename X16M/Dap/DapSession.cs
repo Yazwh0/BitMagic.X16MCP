@@ -392,6 +392,13 @@ public sealed class DapSession : IDisposable
         return _host!.SendRequestSync(new SpriteRequest());
     }
 
+    /// <summary>Most recent page of executed instructions (up to 1024, most-recent-first).</summary>
+    public HistoryRequestResponse GetHistory()
+    {
+        RequireActive();
+        return _host!.SendRequestSync(new HistoryRequest());
+    }
+
     public void Disconnect()
     {
         lock (_gate)

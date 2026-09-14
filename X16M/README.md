@@ -68,8 +68,7 @@ don't show up after a full restart, remove it and re-add: `claude mcp remove x16
 
 ## Available tools
 
-Standard DAP is covered, plus X16-specific tools for VERA layers and sprites. Palette, CPU
-history and the CPU profiler aren't wired up yet.
+Standard DAP is covered, plus X16-specific tools for VERA layers, sprites and CPU history.
 
 | Tool | Description |
 | ---- | ----------- |
@@ -86,6 +85,7 @@ history and the CPU profiler aren't wired up yet.
 | `read_memory(memoryReference, count)` | Reads a block of memory. |
 | `get_layers()` | Returns the current VERA display as six images, one per compositing layer (background, layer 0, layer 1, and sprites at each of their three depth slots). While paused mid-frame this can be a partial image rather than a complete one, since the beam only advances alongside executed CPU cycles. |
 | `get_sprites()` | Returns each sprite VERA currently has enabled (depth != 0), with its attributes and its own cropped image. VERA has a fixed table of 128 sprite slots; disabled ones are omitted rather than returned as 128 mostly-empty entries. |
+| `get_cpu_history(count?)` | Returns the most recently executed CPU instructions, most recent first, with register state, flags and source file/line where known. Useful for seeing how execution actually reached the current stop, not just where it is now. |
 | `disconnect()` | Ends the debug session. |
 
 ## Example
