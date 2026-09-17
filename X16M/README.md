@@ -26,6 +26,12 @@ This bundles a matching build of `X16D` for your platform, Windows or Linux, so 
 else to configure beyond a [ROM](https://bitmagic.org/emulator/rom). For an early build, add
 `--prerelease`.
 
+A .NET tool doesn't auto-update. To pick up a newer version later, run:
+
+```bash
+dotnet tool update -g BitMagic.X16M
+```
+
 ## A ROM
 
 Place it as `rom.bin` next to the bundled `X16D`, or point the `BITMAGIC_ROM` environment
