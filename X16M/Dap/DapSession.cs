@@ -380,6 +380,19 @@ public sealed class DapSession : IDisposable
         return _host!.SendRequestSync(new ReadMemoryRequest(memoryReference, count));
     }
 
+    public MemorySearchResponse SearchMemory(string memoryReference, string patternBase64, bool caseInsensitive, int maxResults = 500)
+    {
+        RequireActive();
+
+        var request = new MemorySearchRequest();
+        request.Args.MemoryReference = memoryReference;
+        request.Args.Pattern = patternBase64;
+        request.Args.CaseInsensitive = caseInsensitive;
+        request.Args.MaxResults = maxResults;
+
+        return _host!.SendRequestSync(request);
+    }
+
     public LayerRequestResponse GetLayers()
     {
         RequireActive();

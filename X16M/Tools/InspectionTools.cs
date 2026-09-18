@@ -55,4 +55,53 @@ public static class InspectionTools
         var response = session.ReadMemory(memoryReference, count);
         return $"address: {response.Address}, data (base64): {response.Data}";
     }
+
+    [McpServerTool(Name = "search_memory", ReadOnly = true, Destructive = false, Idempotent = true)]
+    [Description("Searches a whole memory space for a byte pattern or text string, returning matching offsets. Runs server-side, so it's safe to use on large spaces like the SD card image without transferring the data.")]
+    public static string SearchMemory(
+        DapSession session,
+        [Description("Memory space to search: 'main', 'vram', 'nvram', 'sdcard', 'rambank_<N>', or 'rombank_<N>'.")] string memoryReference,
+        [Description("Text to search for (case-insensitive), or hex bytes prefixed with $ or 0x, e.g. 'DEADBEEF' or 'DE AD BE EF'.")] string pattern,
+        [Description("Maximum number of matches to return.")] int maxResults = 100)
+    {
+        var (patternBase64, caseInsensitive) = ParseSearchPattern(pattern);
+        if (patternBase64 is null)
+            return "Could not parse the search pattern.";
+
+        var response = session.SearchMemory(memoryReference, patternBase64, caseInsensitive, maxResults);
+
+        if (response.Matches.Count == 0)
+            return "No matches found.";
+
+        var summary = response.Truncated
+            ? $"Showing the first {response.Matches.Count} matches (more exist):"
+            : $"{response.Matches.Count} match(es):";
+
+        return summary + Environment.NewLine + string.Join(Environment.NewLine, response.Matches.Select(offset => $"0x{offset:X4}"));
+    }
+
+    // A leading $ or 0x means hex bytes (whitespace between pairs is fine); anything else is a
+    // literal, case-insensitive text search.
+    private static (string? patternBase64, bool caseInsensitive) ParseSearchPattern(string pattern)
+    {
+        var trimmed = pattern.Trim();
+        if (trimmed.Length == 0)
+            return (null, false);
+
+        var isHex = trimmed.StartsWith("$") || trimmed.StartsWith("0x", StringComparison.OrdinalIgnoreCase);
+        if (isHex)
+        {
+            var hex = (trimmed.StartsWith("$") ? trimmed[1..] : trimmed[2..]).Replace(" ", "");
+            if (hex.Length == 0 || hex.Length % 2 != 0 || !hex.All(Uri.IsHexDigit))
+                return (null, false);
+
+            var bytes = new byte[hex.Length / 2];
+            for (var i = 0; i < bytes.Length; i++)
+                bytes[i] = Convert.ToByte(hex.Substring(i * 2, 2), 16);
+
+            return (Convert.ToBase64String(bytes), false);
+        }
+
+        return (Convert.ToBase64String(System.Text.Encoding.Latin1.GetBytes(trimmed)), true);
+    }
 }
