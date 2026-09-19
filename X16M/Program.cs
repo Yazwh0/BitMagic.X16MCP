@@ -28,8 +28,12 @@ internal static class Program
     {
         var options = Parser.Default.ParseArguments<Options>(args).Value ?? new Options();
 
+        // A null connection with no error means "nothing configured" - fine, attach_to_session
+        // doesn't need one. A null connection WITH an error means the caller got something
+        // wrong (e.g. only one of --x16d-host/--x16d-port) and should be told, not silently
+        // dropped into attach-only mode.
         X16DConnection? connection = ResolveConnection(options, out var resolutionError);
-        if (connection is null)
+        if (connection is null && resolutionError is not null)
         {
             await Console.Error.WriteLineAsync(resolutionError);
             return 1;
@@ -44,7 +48,14 @@ internal static class Program
         builder.Services.AddSingleton(new DapSession(connection));
 
         builder.Services
-            .AddMcpServer()
+            .AddMcpServer(o => o.ServerInstructions =
+                "Two ways to use these tools: (1) launch_project starts and owns a session - " +
+                "step/continue/breakpoints/disconnect are all yours to drive. (2) attach_to_session " +
+                "attaches to a session VSCode already launched and owns - stepping, breakpoints, " +
+                "continue, and disconnect stay with VSCode (or its own chat integration); use this " +
+                "server's tools there only to read and amend X16-specific state (memory, sprites, " +
+                "palette, layers, CPU history), not to drive execution. The two modes are mutually " +
+                "exclusive per session - call disconnect before switching between them.")
             .WithStdioServerTransport()
             .WithToolsFromAssembly();
 
@@ -52,9 +63,9 @@ internal static class Program
         return 0;
     }
 
-    private static X16DConnection? ResolveConnection(Options options, out string error)
+    private static X16DConnection? ResolveConnection(Options options, out string? error)
     {
-        error = "";
+        error = null;
 
         var host = !string.IsNullOrWhiteSpace(options.X16DHost)
             ? options.X16DHost
@@ -85,10 +96,8 @@ internal static class Program
 
         if (string.IsNullOrWhiteSpace(x16dPath))
         {
-            error =
-                $"X16M: no X16D configured. Expected a bundled copy at '{bundledX16DPath}', or pass --x16d <path-to-X16D.exe> " +
-                $"(or set {X16DPathEnvironmentVariable}) to spawn one, or --x16d-host/--x16d-port " +
-                $"(or {X16DHostEnvironmentVariable}/{X16DPortEnvironmentVariable}) to connect to one already running with --dapport.";
+            // Not an error: no default connection just means launch_project won't work until
+            // one is configured, but attach_to_session (which needs none) still will.
             return null;
         }
 

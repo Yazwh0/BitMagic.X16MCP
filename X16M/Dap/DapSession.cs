@@ -41,7 +41,9 @@ public sealed class DapSession : IDisposable
     // then get an error instead of a usable session.
     private static readonly TimeSpan LaunchInitialStopTimeout = TimeSpan.FromSeconds(3);
 
-    private readonly X16DConnection _connection;
+    // Null when X16M was started with no --x16d/--x16d-host configured - Launch() then isn't
+    // usable (there's nothing to spawn or connect to), but Attach() never needs this at all.
+    private readonly X16DConnection? _connection;
     private readonly object _gate = new();
 
     // Serializes continue/step calls: DAP only supports one outstanding execution-control
@@ -73,14 +75,78 @@ public sealed class DapSession : IDisposable
     private static readonly string LogPath = Path.Combine(AppContext.BaseDirectory, "x16m-dap.log");
     private StreamWriter? _logWriter;
 
-    public DapSession(X16DConnection connection)
+    public DapSession(X16DConnection? connection)
     {
         _connection = connection;
     }
 
     public bool IsActive => _active;
+    public bool IsAttached { get; private set; }
     public StoppedEvent? LastStop { get; private set; }
     public bool Terminated { get; private set; }
+
+    // Attaches to a session someone else (VSCode) already launched and owns, e.g. on X16D's
+    // --queryport. Unlike Launch, this never creates a session - only views/amends one that's
+    // already live - so it skips the ROM check, launch request, and initial breakpoints.
+    public async Task Attach(string host, int port)
+    {
+        lock (_gate)
+        {
+            if (IsActive)
+                throw new InvalidOperationException("A debug session is already running. Call disconnect first.");
+
+            _logWriter?.Dispose();
+            _logWriter = new StreamWriter(LogPath, append: true) { AutoFlush = true };
+            Log($"=== Attach: {host}:{port} ===");
+
+            _tcpClient = new TcpClient();
+            _tcpClient.Connect(host, port);
+            var stream = _tcpClient.GetStream();
+
+            _host = new DebugProtocolHost(stream, stream, registerStandardHandlers: false);
+            _host.LogMessage += (_, e) => Log($"[DAP:{e.Category}] {e.Message}");
+            _host.RegisterEventType<StoppedEvent>(OnStopped);
+            _host.RegisterEventType<TerminatedEvent>(OnTerminated);
+            _host.RegisterEventType<ExitedEvent>(_ => OnTerminated(new TerminatedEvent()));
+            _host.RegisterEventType<OutputEvent>(e =>
+            {
+                Log($"[X16D:{e.Category}] {e.Output?.TrimEnd()}");
+                if (e.Severity == OutputEvent.SeverityValue.Error && !string.IsNullOrWhiteSpace(e.Output))
+                    _lastErrorOutput = e.Output.TrimEnd();
+            });
+            _host.RegisterEventType<BreakpointEvent>(OnBreakpointEvent);
+
+            _pumpThread = new Thread(() =>
+            {
+                _host.Run();
+                _host.WaitForReader();
+            })
+            {
+                IsBackground = true,
+                Name = "X16M DAP pump (attach)",
+            };
+            _pumpThread.Start();
+
+            _active = true;
+            IsAttached = true;
+            Terminated = false;
+            LastStop = null;
+            _lastErrorOutput = null;
+
+            _host.SendRequestSync(new InitializeRequest("x16m"));
+        }
+
+        try
+        {
+            await Task.Run(() => _host!.SendRequestSync(new AttachRequest()));
+        }
+        catch (Exception ex)
+        {
+            var detail = _lastErrorOutput ?? ex.Message;
+            Shutdown();
+            throw new InvalidOperationException($"Could not attach: {detail}");
+        }
+    }
 
     public async Task<LaunchOutcome> Launch(string projectPath, IReadOnlyList<BreakpointSpec>? initialBreakpoints = null, string? workingDirectory = null)
     {
@@ -92,6 +158,9 @@ public sealed class DapSession : IDisposable
         {
             if (IsActive)
                 throw new InvalidOperationException("A debug session is already running. Call disconnect first.");
+
+            if (_connection is null)
+                throw new InvalidOperationException("X16M was started with no X16D configured (--x16d/--x16d-host). Restart it with one, or use attach_to_session instead.");
 
             if (!File.Exists(projectPath))
                 throw new FileNotFoundException($"Project file not found at '{projectPath}'.");
@@ -298,6 +367,7 @@ public sealed class DapSession : IDisposable
     public IReadOnlyList<Breakpoint> SetBreakpoints(string file, IReadOnlyList<int> lines)
     {
         RequireActive();
+        RequireNotAttached("set_breakpoints");
         return SendSetBreakpoints(file, lines);
     }
 
@@ -380,6 +450,15 @@ public sealed class DapSession : IDisposable
         return _host!.SendRequestSync(new ReadMemoryRequest(memoryReference, count));
     }
 
+    // Available in both spawn/launch and attach mode - amending memory isn't a control-flow
+    // operation, so it's not restricted the way SetBreakpoints/Continue/Step are.
+    public WriteMemoryResponse WriteMemory(string memoryReference, byte[] data)
+    {
+        RequireActive();
+        var request = new WriteMemoryRequest(memoryReference, Convert.ToBase64String(data));
+        return _host!.SendRequestSync(request);
+    }
+
     public MemorySearchResponse SearchMemory(string memoryReference, string patternBase64, bool caseInsensitive, int maxResults = 500)
     {
         RequireActive();
@@ -416,7 +495,9 @@ public sealed class DapSession : IDisposable
     {
         lock (_gate)
         {
-            if (_host is not null && IsActive)
+            // Attach mode doesn't own the session - X16D rejects a terminating disconnect from
+            // it anyway (see X16Debug.RequireNotAttachOnly) - so just drop our own connection.
+            if (_host is not null && IsActive && !IsAttached)
             {
                 try { _host.SendRequestSync(new DisconnectRequest { TerminateDebuggee = true }); }
                 catch { /* best-effort; we're tearing the process down regardless */ }
@@ -426,8 +507,16 @@ public sealed class DapSession : IDisposable
         }
     }
 
+    private void RequireNotAttached(string action)
+    {
+        if (IsAttached)
+            throw new InvalidOperationException($"{action} is not available while attached to an existing session - use VSCode to control it.");
+    }
+
     private async Task<StopOutcome> SendAndWaitForStop(Action sendRequest, TimeSpan? timeout)
     {
+        RequireNotAttached("continue/step");
+
         // Only one continue/step can be in flight at a time - see _stepLock's declaration for
         // why. A second call simply waits its turn rather than racing on _pendingStop.
         await _stepLock.WaitAsync();
@@ -500,7 +589,7 @@ public sealed class DapSession : IDisposable
     private void RequireActive()
     {
         if (_host is null || !IsActive)
-            throw new InvalidOperationException("No active debug session. Call launch_project first.");
+            throw new InvalidOperationException("No active debug session. Call launch_project or attach_to_session first.");
     }
 
     private void Shutdown()
@@ -521,6 +610,7 @@ public sealed class DapSession : IDisposable
         _tcpClient = null;
         _host = null;
         _active = false;
+        IsAttached = false;
     }
 
     public void Dispose()

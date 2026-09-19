@@ -56,6 +56,17 @@ public static class InspectionTools
         return $"address: {response.Address}, data (base64): {response.Data}";
     }
 
+    [McpServerTool(Name = "write_memory", ReadOnly = false, Destructive = true, Idempotent = false)]
+    [Description("Writes raw bytes starting at a memory reference, to amend live state (e.g. poke a value to test a theory). Available even when attached to a session you don't own, since it amends state rather than controlling execution - unlike set_breakpoints/continue_execution/step_*.")]
+    public static string WriteMemory(
+        DapSession session,
+        [Description("Memory reference to start writing to, e.g. an address like '0x0810'.")] string memoryReference,
+        [Description("Bytes to write (each 0-255), starting at that address.")] byte[] data)
+    {
+        var response = session.WriteMemory(memoryReference, data);
+        return $"Wrote {response.BytesWritten} of {data.Length} byte(s) at offset {response.Offset}.";
+    }
+
     [McpServerTool(Name = "search_memory", ReadOnly = true, Destructive = false, Idempotent = true)]
     [Description("Searches a whole memory space for a byte pattern or text string, returning matching offsets. Runs server-side, so it's safe to use on large spaces like the SD card image without transferring the data.")]
     public static string SearchMemory(
