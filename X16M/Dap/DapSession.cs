@@ -475,6 +475,21 @@ public sealed class DapSession : IDisposable
         return _host!.SendRequestSync(request);
     }
 
+    // frameId only matters for the "Locals" scope (X16Debug rebuilds it against whatever
+    // frame you pass); every other scope (Globals, CPU, VERA, ...) ignores it and comes
+    // back the same regardless - 0 is a harmless default when you don't care.
+    public async Task<ScopesResponse> GetScopes(int frameId = 0)
+    {
+        await EnsureSessionAsync();
+        return _host!.SendRequestSync(new ScopesRequest(frameId));
+    }
+
+    public async Task<VariablesResponse> GetVariables(int variablesReference)
+    {
+        await EnsureSessionAsync();
+        return _host!.SendRequestSync(new VariablesRequest(variablesReference));
+    }
+
     public async Task<EvaluateResponse> Evaluate(string expression, int? frameId = null)
     {
         await EnsureSessionAsync();

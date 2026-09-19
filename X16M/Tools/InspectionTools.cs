@@ -19,6 +19,68 @@ public static class InspectionTools
         return string.Join(Environment.NewLine, frames);
     }
 
+    // Measured against a real project: Globals/Kernal are tiny, CPU ~10K chars, but VERA hit
+    // ~38K chars/1869 lines at depth 6 (sprite/palette-sized hardware scopes are wide, not just
+    // deep). Conservative defaults plus a hard line cap keep one call from surprising a caller
+    // that just asked for a scope by name without knowing its size.
+    private const int DefaultMaxDepth = 3;
+    private const int MaxLines = 300;
+
+    [McpServerTool(Name = "get_variables", ReadOnly = true, Destructive = false, Idempotent = true)]
+    [Description("Lists every variable in a debug scope as an indented tree, e.g. 'Globals' for every variable the compiler knows about across the whole program (nested exactly as you'd type it into evaluate, e.g. a line \"NestedProc\" under \"MyProc\" under \"Main\" means Main:MyProc:NestedProc:someVar), 'Locals' for the current stack frame's variables, or any hardware scope (CPU, VERA, VERA Audio, VERA FX, Kernal, Display, I2C, SMC, UART, RTC, VIA, SD Card). Call this with no scopeName first to see the available scope names. Some hardware scopes (e.g. VERA) are large - the default depth is deliberately shallow and the result is capped at 300 lines; pass a smaller maxDepth to narrow it down or evaluate a specific path directly once you know it.")]
+    public static async Task<string> GetVariables(
+        DapSession session,
+        [Description("Scope name, e.g. 'Globals' or 'Locals'. Omit to just list the available scope names.")] string? scopeName = null,
+        [Description("Stack frame id from get_stack_trace. Only affects the 'Locals' scope - every other scope ignores it and a default of 0 is fine.")] int frameId = 0,
+        [Description("How many levels deep to expand nested variables. Some scopes (e.g. VERA) are wide as well as deep, so even a shallow depth can be a lot of output.")] int maxDepth = DefaultMaxDepth)
+    {
+        var scopesResponse = await session.GetScopes(frameId);
+
+        if (scopeName is null)
+            return "Available scopes: " + string.Join(", ", scopesResponse.Scopes.Select(s => s.Name));
+
+        var scope = scopesResponse.Scopes.FirstOrDefault(s => string.Equals(s.Name, scopeName, StringComparison.OrdinalIgnoreCase));
+        if (scope is null)
+            return $"No scope named '{scopeName}'. Available scopes: {string.Join(", ", scopesResponse.Scopes.Select(s => s.Name))}";
+
+        if (scope.VariablesReference == 0)
+            return $"{scope.Name}: (empty)";
+
+        var lines = new List<string>();
+        var truncated = !await AppendVariableTree(session, scope.VariablesReference, 0, maxDepth, lines);
+
+        if (lines.Count == 0)
+            return $"{scope.Name}: (empty)";
+
+        if (truncated)
+            lines.Add($"... truncated at {MaxLines} lines. Narrow down with a smaller maxDepth, or evaluate a specific path directly once you know it.");
+
+        return string.Join(Environment.NewLine, lines);
+    }
+
+    // Returns false if it stopped early because MaxLines was hit.
+    private static async Task<bool> AppendVariableTree(DapSession session, int variablesReference, int depth, int maxDepth, List<string> lines)
+    {
+        var response = await session.GetVariables(variablesReference);
+        var indent = new string(' ', depth * 2);
+
+        foreach (var v in response.Variables)
+        {
+            if (lines.Count >= MaxLines)
+                return false;
+
+            lines.Add($"{indent}{v.Name} = {v.Value}");
+
+            if (v.VariablesReference != 0 && depth < maxDepth)
+            {
+                if (!await AppendVariableTree(session, v.VariablesReference, depth + 1, maxDepth, lines))
+                    return false;
+            }
+        }
+
+        return true;
+    }
+
     [McpServerTool(Name = "evaluate", ReadOnly = true, Destructive = false, Idempotent = true)]
     [Description("Evaluates an expression in the debugger's expression language (registers, symbols, memory, etc.) in the context of a stack frame.")]
     public static async Task<string> Evaluate(
