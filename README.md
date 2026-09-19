@@ -63,6 +63,13 @@ above) is instead a job for the BitMagic superproject's own CI
   `read_memory(memoryReference, count)`
 - `disconnect()`
 
+## Resources
+
+- `bmasm-syntax` (`docs://bmasm-syntax`): a purpose-written `.bmasm`/Template Engine syntax
+  reference - directives, types, labels, scope, expressions, embedded C#, the BM library, and a
+  worked example - for an agent to read before writing or editing `.bmasm` code. See
+  `X16M/Resources/BmasmSyntax.md`.
+
 X16-specific DAP requests (sprite/palette/layer/history/CPU profiler) aren't wired up yet, a
 natural follow-up once this slice is proven out.
 

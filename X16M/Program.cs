@@ -62,7 +62,8 @@ internal static class Program
                 "driving execution - those calls fail with a clear error explaining that. The two " +
                 "modes are mutually exclusive per session - call disconnect before switching.")
             .WithStdioServerTransport()
-            .WithToolsFromAssembly();
+            .WithToolsFromAssembly()
+            .WithResourcesFromAssembly();
 
         await builder.Build().RunAsync();
         return 0;

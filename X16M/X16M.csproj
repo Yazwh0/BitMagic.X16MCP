@@ -15,6 +15,12 @@
     <PackageReference Include="ModelContextProtocol" Version="2.2.0" />
   </ItemGroup>
 
+  <!-- Served as an MCP resource (see Resources/SyntaxResources.cs) - embedded rather than
+       Content so it's always available regardless of how/where X16M ends up installed. -->
+  <ItemGroup>
+    <EmbeddedResource Include="Resources\BmasmSyntax.md" LogicalName="X16M.Resources.BmasmSyntax.md" />
+  </ItemGroup>
+
   <!--
     X16D isn't bundled by this project's build - locally it's pointed to via config
     (the X16D_PATH env var, or the "x16d" command line option; see Properties/launchSettings.json)
