@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Net.Sockets;
 using Microsoft.VisualStudio.Shared.VSCodeDebugProtocol;
 using Microsoft.VisualStudio.Shared.VSCodeDebugProtocol.Messages;
+using ModelContextProtocol;
 using Newtonsoft.Json.Linq;
 using Thread = System.Threading.Thread;
 
@@ -85,6 +86,53 @@ public sealed class DapSession : IDisposable
     public StoppedEvent? LastStop { get; private set; }
     public bool Terminated { get; private set; }
 
+    private const string ConnectionInfoFileName = "bitmagic-debug-session.json";
+
+    // Written by BitMagic.VSC next to the project whenever its shared debug process (re)starts -
+    // see extension.ts. Checked one directory at a time up to two levels, since this process's
+    // own cwd (set by whatever launched it) may be a subfolder of the project root.
+    internal static (string host, int port)? FindConnectionInfo(string startDir)
+    {
+        var dir = new DirectoryInfo(startDir);
+        for (var depth = 0; depth < 2 && dir is not null; depth++, dir = dir.Parent)
+        {
+            var path = Path.Combine(dir.FullName, ".vscode", ConnectionInfoFileName);
+            if (!File.Exists(path))
+                continue;
+
+            try
+            {
+                var json = JObject.Parse(File.ReadAllText(path));
+                var host = json.Value<string>("host");
+                var port = json.Value<int?>("queryPort");
+                if (!string.IsNullOrWhiteSpace(host) && port is > 0)
+                    return (host!, port.Value);
+            }
+            catch
+            {
+                // Malformed/mid-write file - keep looking rather than fail outright.
+            }
+        }
+
+        return null;
+    }
+
+    // So callers don't have to remember to call attach_to_session first: every read/amend method
+    // below calls this instead of the old plain RequireActive(). No-op once a session (launched
+    // or attached) is already active; only tries to attach when idle, never when something's
+    // already in progress or already owned.
+    private async Task EnsureSessionAsync()
+    {
+        if (IsActive)
+            return;
+
+        var found = FindConnectionInfo(Directory.GetCurrentDirectory());
+        if (found is null)
+            throw new McpException("No active debug session. Call launch_project to start one, or make sure VSCode has a debug session running.");
+
+        await Attach(found.Value.host, found.Value.port);
+    }
+
     // Attaches to a session someone else (VSCode) already launched and owns, e.g. on X16D's
     // --queryport. Unlike Launch, this never creates a session - only views/amends one that's
     // already live - so it skips the ROM check, launch request, and initial breakpoints.
@@ -93,7 +141,7 @@ public sealed class DapSession : IDisposable
         lock (_gate)
         {
             if (IsActive)
-                throw new InvalidOperationException("A debug session is already running. Call disconnect first.");
+                throw new McpException("A debug session is already running. Call disconnect first.");
 
             _logWriter?.Dispose();
             _logWriter = new StreamWriter(LogPath, append: true) { AutoFlush = true };
@@ -144,7 +192,7 @@ public sealed class DapSession : IDisposable
         {
             var detail = _lastErrorOutput ?? ex.Message;
             Shutdown();
-            throw new InvalidOperationException($"Could not attach: {detail}");
+            throw new McpException($"Could not attach: {detail}");
         }
     }
 
@@ -157,13 +205,13 @@ public sealed class DapSession : IDisposable
         lock (_gate)
         {
             if (IsActive)
-                throw new InvalidOperationException("A debug session is already running. Call disconnect first.");
+                throw new McpException("A debug session is already running. Call disconnect first.");
 
             if (_connection is null)
-                throw new InvalidOperationException("X16M was started with no X16D configured (--x16d/--x16d-host). Restart it with one, or use attach_to_session instead.");
+                throw new McpException("X16M was started with no X16D configured (--x16d/--x16d-host). Restart it with one, or use attach_to_session instead.");
 
             if (!File.Exists(projectPath))
-                throw new FileNotFoundException($"Project file not found at '{projectPath}'.");
+                throw new McpException($"Project file not found at '{projectPath}'.");
 
             // Best-effort only (doesn't know project.json-level RomFile/EmulatorDirectory
             // overrides), so a miss is a warning, not a launch precondition.
@@ -182,7 +230,7 @@ public sealed class DapSession : IDisposable
             {
                 X16DConnection.Spawn spawn => StartProcess(spawn, workingDirectory),
                 X16DConnection.Tcp tcp => ConnectTcp(tcp),
-                _ => throw new NotSupportedException($"Unknown X16D connection type '{_connection.GetType()}'."),
+                _ => throw new McpException($"Unknown X16D connection type '{_connection.GetType()}'."),
             };
 
             // registerStandardHandlers defaults to true on the 2-arg ctor, which pre-registers
@@ -272,7 +320,7 @@ public sealed class DapSession : IDisposable
             // MCP SDK reads as "caller cancelled" and answers with silence instead of an error.
             // Rethrow as a plain exception so it's actually reported.
             var detail = _lastErrorOutput ?? ex.Message;
-            throw new InvalidOperationException($"X16D exited before completing launch: {detail}");
+            throw new McpException($"X16D exited before completing launch: {detail}");
         }
 
         // VS Code never sends configurationDone (X16D's initialize response doesn't advertise
@@ -288,7 +336,7 @@ public sealed class DapSession : IDisposable
         {
             stop = await SendAndWaitForStop(() => _host!.SendRequestSync(new ConfigurationDoneRequest()), LaunchInitialStopTimeout);
         }
-        catch (TimeoutException)
+        catch (McpException)
         {
             stop = new StopOutcome(Terminated: false, Stopped: null);
         }
@@ -316,7 +364,7 @@ public sealed class DapSession : IDisposable
     private (Stream input, Stream output) StartProcess(X16DConnection.Spawn spawn, string? workingDirectory)
     {
         if (!File.Exists(spawn.ExecutablePath))
-            throw new FileNotFoundException($"X16D executable not found at '{spawn.ExecutablePath}'.");
+            throw new McpException($"X16D executable not found at '{spawn.ExecutablePath}'.");
 
         var psi = new ProcessStartInfo
         {
@@ -329,7 +377,7 @@ public sealed class DapSession : IDisposable
             WorkingDirectory = workingDirectory ?? Path.GetDirectoryName(Path.GetFullPath(spawn.ExecutablePath)) ?? Environment.CurrentDirectory,
         };
 
-        var process = Process.Start(psi) ?? throw new InvalidOperationException("Failed to start X16D.");
+        var process = Process.Start(psi) ?? throw new McpException("Failed to start X16D.");
         _process = process;
 
         // If X16D dies (crash, killed externally, anything short of a clean DAP terminate/exit)
@@ -364,17 +412,17 @@ public sealed class DapSession : IDisposable
         return (stream, stream);
     }
 
-    public IReadOnlyList<Breakpoint> SetBreakpoints(string file, IReadOnlyList<int> lines)
+    public async Task<IReadOnlyList<Breakpoint>> SetBreakpoints(string file, IReadOnlyList<int> lines)
     {
-        RequireActive();
+        await EnsureSessionAsync();
         RequireNotAttached("set_breakpoints");
         return SendSetBreakpoints(file, lines);
     }
 
     // Shared by SetBreakpoints and Launch(initialBreakpoints:) - the latter calls this directly
-    // (bypassing RequireActive, which would already be satisfied) immediately after sending
-    // launch, before configurationDone, so the breakpoint is queued as close to VS Code's own
-    // pipelined launch->setBreakpoints sequence as possible.
+    // (session is already active by then) immediately after sending launch, before
+    // configurationDone, so the breakpoint is queued as close to VS Code's own pipelined
+    // launch->setBreakpoints sequence as possible.
     private IReadOnlyList<Breakpoint> SendSetBreakpoints(string file, IReadOnlyList<int> lines)
     {
         // A relative path means nothing resolved against this process's own working directory,
@@ -420,16 +468,16 @@ public sealed class DapSession : IDisposable
     public Task<StopOutcome> StepOutAsync(int threadId = 1, TimeSpan? timeout = null)
         => SendAndWaitForStop(() => _host!.SendRequestSync(new StepOutRequest(threadId)), timeout);
 
-    public StackTraceResponse GetStackTrace(int threadId = 1, int startFrame = 0, int levels = 20)
+    public async Task<StackTraceResponse> GetStackTrace(int threadId = 1, int startFrame = 0, int levels = 20)
     {
-        RequireActive();
+        await EnsureSessionAsync();
         var request = new StackTraceRequest(threadId) { StartFrame = startFrame, Levels = levels };
         return _host!.SendRequestSync(request);
     }
 
-    public EvaluateResponse Evaluate(string expression, int? frameId = null)
+    public async Task<EvaluateResponse> Evaluate(string expression, int? frameId = null)
     {
-        RequireActive();
+        await EnsureSessionAsync();
         var request = new EvaluateRequest(expression)
         {
             FrameId = frameId,
@@ -438,30 +486,30 @@ public sealed class DapSession : IDisposable
         return _host!.SendRequestSync(request);
     }
 
-    public DisassembleResponse Disassemble(string memoryReference, int instructionCount)
+    public async Task<DisassembleResponse> Disassemble(string memoryReference, int instructionCount)
     {
-        RequireActive();
+        await EnsureSessionAsync();
         return _host!.SendRequestSync(new DisassembleRequest(memoryReference, instructionCount));
     }
 
-    public ReadMemoryResponse ReadMemory(string memoryReference, int count)
+    public async Task<ReadMemoryResponse> ReadMemory(string memoryReference, int count)
     {
-        RequireActive();
+        await EnsureSessionAsync();
         return _host!.SendRequestSync(new ReadMemoryRequest(memoryReference, count));
     }
 
     // Available in both spawn/launch and attach mode - amending memory isn't a control-flow
     // operation, so it's not restricted the way SetBreakpoints/Continue/Step are.
-    public WriteMemoryResponse WriteMemory(string memoryReference, byte[] data)
+    public async Task<WriteMemoryResponse> WriteMemory(string memoryReference, byte[] data)
     {
-        RequireActive();
+        await EnsureSessionAsync();
         var request = new WriteMemoryRequest(memoryReference, Convert.ToBase64String(data));
         return _host!.SendRequestSync(request);
     }
 
-    public MemorySearchResponse SearchMemory(string memoryReference, string patternBase64, bool caseInsensitive, int maxResults = 500)
+    public async Task<MemorySearchResponse> SearchMemory(string memoryReference, string patternBase64, bool caseInsensitive, int maxResults = 500)
     {
-        RequireActive();
+        await EnsureSessionAsync();
 
         var request = new MemorySearchRequest();
         request.Args.MemoryReference = memoryReference;
@@ -472,22 +520,22 @@ public sealed class DapSession : IDisposable
         return _host!.SendRequestSync(request);
     }
 
-    public LayerRequestResponse GetLayers()
+    public async Task<LayerRequestResponse> GetLayers()
     {
-        RequireActive();
+        await EnsureSessionAsync();
         return _host!.SendRequestSync(new LayerRequest());
     }
 
-    public SpriteRequestResponse GetSprites()
+    public async Task<SpriteRequestResponse> GetSprites()
     {
-        RequireActive();
+        await EnsureSessionAsync();
         return _host!.SendRequestSync(new SpriteRequest());
     }
 
     /// <summary>Most recent page of executed instructions (up to 1024, most-recent-first).</summary>
-    public HistoryRequestResponse GetHistory()
+    public async Task<HistoryRequestResponse> GetHistory()
     {
-        RequireActive();
+        await EnsureSessionAsync();
         return _host!.SendRequestSync(new HistoryRequest());
     }
 
@@ -510,11 +558,12 @@ public sealed class DapSession : IDisposable
     private void RequireNotAttached(string action)
     {
         if (IsAttached)
-            throw new InvalidOperationException($"{action} is not available while attached to an existing session - use VSCode to control it.");
+            throw new McpException($"{action} is not available while attached to an existing session - use VSCode to control it.");
     }
 
     private async Task<StopOutcome> SendAndWaitForStop(Action sendRequest, TimeSpan? timeout)
     {
+        await EnsureSessionAsync();
         RequireNotAttached("continue/step");
 
         // Only one continue/step can be in flight at a time - see _stepLock's declaration for
@@ -522,10 +571,8 @@ public sealed class DapSession : IDisposable
         await _stepLock.WaitAsync();
         try
         {
-            RequireActive();
-
             if (Terminated)
-                throw new InvalidOperationException("The target has already terminated. Call launch_project to start a new session.");
+                throw new McpException("The target has already terminated. Call launch_project to start a new session.");
 
             var tcs = new TaskCompletionSource<StopOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
             _pendingStop = tcs;
@@ -544,7 +591,7 @@ public sealed class DapSession : IDisposable
     {
         var completed = await Task.WhenAny(waitTask, Task.Delay(timeout));
         if (completed != waitTask)
-            throw new TimeoutException($"Timed out after {timeout.TotalSeconds:0}s waiting for the target to stop.");
+            throw new McpException($"Timed out after {timeout.TotalSeconds:0}s waiting for the target to stop.");
 
         return await waitTask;
     }
@@ -584,12 +631,6 @@ public sealed class DapSession : IDisposable
     {
         Console.Error.WriteLine(message);
         try { _logWriter?.WriteLine($"{DateTime.Now:HH:mm:ss.fff} {message}"); } catch { /* ignore */ }
-    }
-
-    private void RequireActive()
-    {
-        if (_host is null || !IsActive)
-            throw new InvalidOperationException("No active debug session. Call launch_project or attach_to_session first.");
     }
 
     private void Shutdown()

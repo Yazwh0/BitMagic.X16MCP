@@ -9,11 +9,11 @@ public static class HistoryTools
 {
     [McpServerTool(Name = "get_cpu_history", ReadOnly = true, Destructive = false, Idempotent = true)]
     [Description("Returns the most recently executed CPU instructions, most recent first, with the register state and flags at each step plus source file/line where known. Useful for seeing how execution actually reached the current stop, not just where it is now.")]
-    public static string GetCpuHistory(
+    public static async Task<string> GetCpuHistory(
         DapSession session,
         [Description("Number of instructions to return, most recent first. Capped at 1024, the size of one history page.")] int count = 50)
     {
-        var response = session.GetHistory();
+        var response = await session.GetHistory();
         count = Math.Clamp(count, 1, 1024);
 
         var lines = response.HistoryItems.Take(count).Select(i =>

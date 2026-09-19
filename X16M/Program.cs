@@ -49,13 +49,18 @@ internal static class Program
 
         builder.Services
             .AddMcpServer(o => o.ServerInstructions =
-                "Two ways to use these tools: (1) launch_project starts and owns a session - " +
-                "step/continue/breakpoints/disconnect are all yours to drive. (2) attach_to_session " +
-                "attaches to a session VSCode already launched and owns - stepping, breakpoints, " +
-                "continue, and disconnect stay with VSCode (or its own chat integration); use this " +
-                "server's tools there only to read and amend X16-specific state (memory, sprites, " +
-                "palette, layers, CPU history), not to drive execution. The two modes are mutually " +
-                "exclusive per session - call disconnect before switching between them.")
+                "No need to call attach_to_session or launch_project up front: every other tool " +
+                "here attaches automatically on first use if VSCode already has a debug session " +
+                "running (via its 'Run debug sessions through the same background process' " +
+                "setting) - just call get_stack_trace/get_sprites/read_memory/etc. directly. Two " +
+                "ways a session ends up active: (1) launch_project starts and owns one yourself - " +
+                "step/continue/breakpoints/disconnect are all yours to drive. (2) auto-attach (or " +
+                "an explicit attach_to_session) joins a session VSCode already launched and owns - " +
+                "stepping, breakpoints, continue, and disconnect stay with VSCode (or its own chat " +
+                "integration); this server's tools there are only for reading and amending " +
+                "X16-specific state (memory, sprites, palette, layers, CPU history), not for " +
+                "driving execution - those calls fail with a clear error explaining that. The two " +
+                "modes are mutually exclusive per session - call disconnect before switching.")
             .WithStdioServerTransport()
             .WithToolsFromAssembly();
 

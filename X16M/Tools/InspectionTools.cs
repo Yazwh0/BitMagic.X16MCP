@@ -9,9 +9,9 @@ public static class InspectionTools
 {
     [McpServerTool(Name = "get_stack_trace", ReadOnly = true, Destructive = false, Idempotent = true)]
     [Description("Returns the current call stack for a thread, with source file/line for each frame where known.")]
-    public static string GetStackTrace(DapSession session, int threadId = 1, int startFrame = 0, int levels = 20)
+    public static async Task<string> GetStackTrace(DapSession session, int threadId = 1, int startFrame = 0, int levels = 20)
     {
-        var response = session.GetStackTrace(threadId, startFrame, levels);
+        var response = await session.GetStackTrace(threadId, startFrame, levels);
 
         var frames = response.StackFrames.Select(f =>
             $"#{f.Id} {f.Name} — {(f.Source is null ? "<no source>" : f.Source.Path)}:{f.Line}");
@@ -21,23 +21,23 @@ public static class InspectionTools
 
     [McpServerTool(Name = "evaluate", ReadOnly = true, Destructive = false, Idempotent = true)]
     [Description("Evaluates an expression in the debugger's expression language (registers, symbols, memory, etc.) in the context of a stack frame.")]
-    public static string Evaluate(
+    public static async Task<string> Evaluate(
         DapSession session,
         [Description("Expression to evaluate.")] string expression,
         [Description("Stack frame id to evaluate in (from get_stack_trace); omit for the top frame's default context.")] int? frameId = null)
     {
-        var response = session.Evaluate(expression, frameId);
+        var response = await session.Evaluate(expression, frameId);
         return response.Result;
     }
 
     [McpServerTool(Name = "disassemble", ReadOnly = true, Destructive = false, Idempotent = true)]
     [Description("Disassembles instructions starting at a memory reference.")]
-    public static string Disassemble(
+    public static async Task<string> Disassemble(
         DapSession session,
         [Description("Memory reference to start disassembling from, e.g. an address like '0x0810' or an expression the target understands.")] string memoryReference,
         [Description("Number of instructions to disassemble.")] int instructionCount = 20)
     {
-        var response = session.Disassemble(memoryReference, instructionCount);
+        var response = await session.Disassemble(memoryReference, instructionCount);
 
         var lines = response.Instructions.Select(i =>
             $"{i.Address}  {i.InstructionBytes,-12} {i.Instruction}");
@@ -47,29 +47,29 @@ public static class InspectionTools
 
     [McpServerTool(Name = "read_memory", ReadOnly = true, Destructive = false, Idempotent = true)]
     [Description("Reads raw bytes starting at a memory reference, returned as base64 (per DAP's readMemory response).")]
-    public static string ReadMemory(
+    public static async Task<string> ReadMemory(
         DapSession session,
         [Description("Memory reference to start reading from, e.g. an address like '0x0810'.")] string memoryReference,
         [Description("Number of bytes to read.")] int count)
     {
-        var response = session.ReadMemory(memoryReference, count);
+        var response = await session.ReadMemory(memoryReference, count);
         return $"address: {response.Address}, data (base64): {response.Data}";
     }
 
     [McpServerTool(Name = "write_memory", ReadOnly = false, Destructive = true, Idempotent = false)]
     [Description("Writes raw bytes starting at a memory reference, to amend live state (e.g. poke a value to test a theory). Available even when attached to a session you don't own, since it amends state rather than controlling execution - unlike set_breakpoints/continue_execution/step_*.")]
-    public static string WriteMemory(
+    public static async Task<string> WriteMemory(
         DapSession session,
         [Description("Memory reference to start writing to, e.g. an address like '0x0810'.")] string memoryReference,
         [Description("Bytes to write (each 0-255), starting at that address.")] byte[] data)
     {
-        var response = session.WriteMemory(memoryReference, data);
+        var response = await session.WriteMemory(memoryReference, data);
         return $"Wrote {response.BytesWritten} of {data.Length} byte(s) at offset {response.Offset}.";
     }
 
     [McpServerTool(Name = "search_memory", ReadOnly = true, Destructive = false, Idempotent = true)]
     [Description("Searches a whole memory space for a byte pattern or text string, returning matching offsets. Runs server-side, so it's safe to use on large spaces like the SD card image without transferring the data.")]
-    public static string SearchMemory(
+    public static async Task<string> SearchMemory(
         DapSession session,
         [Description("Memory space to search: 'main', 'vram', 'nvram', 'sdcard', 'rambank_<N>', or 'rombank_<N>'.")] string memoryReference,
         [Description("Text to search for (case-insensitive), or hex bytes prefixed with $ or 0x, e.g. 'DEADBEEF' or 'DE AD BE EF'.")] string pattern,
@@ -79,7 +79,7 @@ public static class InspectionTools
         if (patternBase64 is null)
             return "Could not parse the search pattern.";
 
-        var response = session.SearchMemory(memoryReference, patternBase64, caseInsensitive, maxResults);
+        var response = await session.SearchMemory(memoryReference, patternBase64, caseInsensitive, maxResults);
 
         if (response.Matches.Count == 0)
             return "No matches found.";

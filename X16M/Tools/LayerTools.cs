@@ -17,9 +17,9 @@ public static class LayerTools
 
     [McpServerTool(Name = "get_layers", ReadOnly = true, Destructive = false, Idempotent = true)]
     [Description("Returns the current VERA display as six separate images in compositing order (Background, Sprite 1, Layer 0, Sprite 2, Layer 1, Sprite 3), matching the VSCode extension's own layer view. Rendered from whatever the display buffer currently holds: while paused mid-frame this can be a partial/torn image rather than a complete one, since the beam only advances alongside executed CPU cycles.")]
-    public static CallToolResult GetLayers(DapSession session)
+    public static async Task<CallToolResult> GetLayers(DapSession session)
     {
-        var response = session.GetLayers();
+        var response = await session.GetLayers();
         var result = new CallToolResult();
 
         for (var i = 0; i < response.Display.Count && i < LayerNames.Length; i++)

@@ -1,6 +1,5 @@
 using System.ComponentModel;
 using ModelContextProtocol.Server;
-using Newtonsoft.Json.Linq;
 using X16M.Dap;
 
 namespace X16M.Tools;
@@ -8,49 +7,18 @@ namespace X16M.Tools;
 [McpServerToolType]
 public static class SessionTools
 {
-    private const string ConnectionInfoFileName = "bitmagic-debug-session.json";
-
     [McpServerTool(Name = "attach_to_session", ReadOnly = false, Destructive = false, Idempotent = false)]
-    [Description("Attaches to an X16 debug session VSCode already launched and owns, to view/amend its state - not to control it. Needs BitMagic.VSC's 'Run debug sessions through the same background process' setting on, and a debug session currently active there. Unlike launch_project, this never starts or stops the session: stepping, breakpoints, continue, and disconnect stay with VSCode (use its own debug tools/chat integration for those) - X16M's tools are for reading and amending X16-specific state (memory, sprites, palette, layers, CPU history) once attached.")]
+    [Description("Explicitly attaches to an X16 debug session VSCode already launched and owns, to view/amend its state - not to control it. Every other tool already does this automatically on first use when idle, so this is only needed to check connectivity up front or to re-attach after a disconnect. Needs BitMagic.VSC's 'Run debug sessions through the same background process' setting on, and a debug session currently active there. Stepping, breakpoints, continue, and disconnect stay with VSCode (use its own debug tools/chat integration for those) - X16M's tools are for reading and amending X16-specific state (memory, sprites, palette, layers, CPU history) once attached.")]
     public static async Task<string> AttachToSession(
         DapSession session,
         [Description("Project directory to look for the running session's connection info in. Defaults to the current working directory.")] string? workspacePath = null)
     {
-        var found = FindConnectionInfo(workspacePath ?? Directory.GetCurrentDirectory());
+        var found = DapSession.FindConnectionInfo(workspacePath ?? Directory.GetCurrentDirectory());
         if (found is null)
             throw new InvalidOperationException("No running BitMagic debug session found. Make sure VSCode has 'Run debug sessions through the same background process' enabled and a debug session is active.");
 
         await session.Attach(found.Value.host, found.Value.port);
         return $"Attached to session on {found.Value.host}:{found.Value.port}.";
-    }
-
-    // Written by BitMagic.VSC next to the project whenever its shared debug process (re)starts -
-    // see extension.ts. Checked one directory at a time up to the project root and one level of
-    // parents, since X16M's own cwd (set by whatever launched it) may be a subfolder of it.
-    private static (string host, int port)? FindConnectionInfo(string startDir)
-    {
-        var dir = new DirectoryInfo(startDir);
-        for (var depth = 0; depth < 2 && dir is not null; depth++, dir = dir.Parent)
-        {
-            var path = Path.Combine(dir.FullName, ".vscode", ConnectionInfoFileName);
-            if (!File.Exists(path))
-                continue;
-
-            try
-            {
-                var json = JObject.Parse(File.ReadAllText(path));
-                var host = json.Value<string>("host");
-                var port = json.Value<int?>("queryPort");
-                if (!string.IsNullOrWhiteSpace(host) && port is > 0)
-                    return (host!, port.Value);
-            }
-            catch
-            {
-                // Malformed/mid-write file - keep looking rather than fail outright.
-            }
-        }
-
-        return null;
     }
 
     [McpServerTool(Name = "launch_project", ReadOnly = false, Destructive = true, Idempotent = false)]

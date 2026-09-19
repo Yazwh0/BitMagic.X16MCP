@@ -10,9 +10,9 @@ public static class SpriteTools
 {
     [McpServerTool(Name = "get_sprites", ReadOnly = true, Destructive = false, Idempotent = true)]
     [Description("Returns each sprite VERA currently has enabled (depth != 0), with its attributes and its own cropped image. VERA has a fixed table of 128 sprite slots; disabled ones (depth 0, not displayed) are omitted rather than returned as 128 mostly-empty entries.")]
-    public static CallToolResult GetSprites(DapSession session)
+    public static async Task<CallToolResult> GetSprites(DapSession session)
     {
-        var response = session.GetSprites();
+        var response = await session.GetSprites();
         var result = new CallToolResult();
         var sprites = response.Sprites ?? [];
 
