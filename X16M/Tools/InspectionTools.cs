@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Globalization;
 using ModelContextProtocol.Server;
 using X16M.Dap;
 
@@ -97,8 +98,37 @@ public static class InspectionTools
     private const string MemorySpaceDescription =
         "Memory space to read/write, not an address: 'main' (CPU-addressable RAM/ROM - use this " +
         "for game state, tile data, sprite attributes etc., the same address space code and " +
-        "disassembly use), 'vram' (VERA video RAM), 'sdcard', 'sdcardblock', 'nvram', " +
-        "'rambank_<N>', or 'rombank_<N>'. The actual address goes in the separate address parameter.";
+        "disassembly use), 'vram' (VERA video RAM), 'sdcard', 'sdcardblock', 'nvram', 'rambank', " +
+        "or 'rombank'. The actual address goes in the separate address parameter; 'rambank'/'rombank' " +
+        "also need the bank parameter.";
+
+    private const string BankDescription = "Bank number - required when memoryReference is 'rambank' or 'rombank', ignored/unused for every other space.";
+
+    // MemorySpaceResolver (server-side) still expects the bank folded into memoryReference as
+    // e.g. "rambank_5" - that wire format doesn't need to change just because the tool-facing
+    // shape now splits it into two parameters that are easier to discover and fill in separately.
+    private static bool TryResolveMemoryReference(string memoryReference, int? bank, out string resolved, out string? error)
+    {
+        var space = memoryReference.Trim().ToLowerInvariant();
+
+        if (space is "rambank" or "rombank")
+        {
+            if (bank is null)
+            {
+                resolved = "";
+                error = $"memoryReference '{memoryReference}' needs a bank number - pass the bank parameter too.";
+                return false;
+            }
+
+            resolved = $"{space}_{bank}";
+            error = null;
+            return true;
+        }
+
+        resolved = memoryReference;
+        error = null;
+        return true;
+    }
 
     [McpServerTool(Name = "disassemble", ReadOnly = true, Destructive = false, Idempotent = true)]
     [Description("Disassembles instructions in CPU-addressable memory (banking is resolved automatically from the address, like the 'main' space in read_memory) starting at a given address.")]
@@ -115,37 +145,44 @@ public static class InspectionTools
         return string.Join(Environment.NewLine, lines);
     }
 
-    // address is a string, not an int: a JSON number can't be written as "0x9A04" - a caller
-    // that follows the hex examples in these descriptions literally would fail to even form a
-    // valid tool call against an int-typed parameter, with no useful error surfacing (MCP
-    // parameter-binding failures happen before McpException-based error handling ever runs).
-    private const string AddressDescription = "Address within that space, as decimal (e.g. '39428') or hex with a '0x' or '$' prefix (e.g. '0x9A04' or '$9A04').";
+    // address is a single concretely-typed string, not JsonElement: a schema with no "type" at
+    // all (tried first) is non-standard, and a real tool-calling client needs a definite type to
+    // know how to serialize the argument - a request that never even reaches our code (confirmed
+    // via the DAP wire log: readMemory never once appears there across several failing rounds)
+    // is consistent with the client being unable to form a call against a type-less schema at
+    // all, not with anything our own parsing logic could catch. A plain string is something
+    // every client can always produce (numbers stringify trivially), and we parse it ourselves.
+    private const string AddressDescription = "Address within that space, as decimal (e.g. \"39428\") or hex with a '0x' or '$' prefix (e.g. \"0x9A04\" or \"$9A04\").";
 
-    private static bool TryParseAddress(string input, out int address)
+    private static bool TryParseAddress(string address, out int value)
     {
-        var trimmed = input.Trim();
+        var trimmed = address.Trim();
 
         if (trimmed.StartsWith("$"))
-            return int.TryParse(trimmed[1..], System.Globalization.NumberStyles.HexNumber, null, out address);
+            return int.TryParse(trimmed[1..], NumberStyles.HexNumber, null, out value);
 
         if (trimmed.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
-            return int.TryParse(trimmed[2..], System.Globalization.NumberStyles.HexNumber, null, out address);
+            return int.TryParse(trimmed[2..], NumberStyles.HexNumber, null, out value);
 
-        return int.TryParse(trimmed, out address);
+        return int.TryParse(trimmed, out value);
     }
 
     [McpServerTool(Name = "read_memory", ReadOnly = true, Destructive = false, Idempotent = true)]
-    [Description("Reads raw bytes from a memory space at a given address, returned as base64. To read a known address like $9A04 in Main RAM, use memoryReference 'main' with address '0x9A04' (or '39428').")]
+    [Description("Reads raw bytes from a memory space at a given address, returned as base64. To read a known address like $9A04 in Main RAM, use memoryReference 'main' with address \"0x9A04\" (or \"39428\").")]
     public static async Task<string> ReadMemory(
         DapSession session,
         [Description(MemorySpaceDescription)] string memoryReference,
         [Description(AddressDescription)] string address,
-        [Description("Number of bytes to read.")] int count)
+        [Description("Number of bytes to read.")] int count,
+        [Description(BankDescription)] int? bank = null)
     {
         if (!TryParseAddress(address, out var addressValue))
             return $"Could not parse address '{address}'. " + AddressDescription;
 
-        var response = await session.ReadMemory(memoryReference, count, addressValue);
+        if (!TryResolveMemoryReference(memoryReference, bank, out var resolvedReference, out var referenceError))
+            return referenceError!;
+
+        var response = await session.ReadMemory(resolvedReference, count, addressValue);
 
         if (string.IsNullOrEmpty(response.Data) || response.UnreadableBytes >= count)
             return $"No data returned - either '{memoryReference}' isn't a recognised memory space, or address 0x{addressValue:X4} is out of range for it. " + MemorySpaceDescription;
@@ -159,12 +196,16 @@ public static class InspectionTools
         DapSession session,
         [Description(MemorySpaceDescription)] string memoryReference,
         [Description(AddressDescription)] string address,
-        [Description("Bytes to write (each 0-255), starting at that address.")] byte[] data)
+        [Description("Bytes to write (each 0-255), starting at that address.")] byte[] data,
+        [Description(BankDescription)] int? bank = null)
     {
         if (!TryParseAddress(address, out var addressValue))
             return $"Could not parse address '{address}'. " + AddressDescription;
 
-        var response = await session.WriteMemory(memoryReference, data, addressValue);
+        if (!TryResolveMemoryReference(memoryReference, bank, out var resolvedReference, out var referenceError))
+            return referenceError!;
+
+        var response = await session.WriteMemory(resolvedReference, data, addressValue);
 
         if (response.BytesWritten == 0 && data.Length > 0)
             return $"Wrote nothing - either '{memoryReference}' isn't a recognised memory space, or address 0x{addressValue:X4} is out of range for it. " + MemorySpaceDescription;

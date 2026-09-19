@@ -29,7 +29,19 @@ if errorlevel 1 (
     exit /b 1
 )
 
-dotnet tool uninstall -g bitmagic.x16m >nul 2>nul
+rem Local packs are always version 0.1.0 (no Nerdbank.GitVersioning override here), so if
+rem uninstall silently fails - e.g. a running X16M.exe still has the old files locked - install
+rem below would otherwise just say "already installed" and quietly leave the OLD build in place.
+rem Not swallowing uninstall's output means that failure is visible instead of silent.
+dotnet tool uninstall -g bitmagic.x16m
 dotnet tool install -g bitmagic.x16m --add-source "%OUT%"
+if errorlevel 1 (
+    echo.
+    echo Install failed - this usually means uninstall above couldn't remove the old files.
+    echo Check for a running X16M.exe holding them locked ^(tasklist /FI "IMAGENAME eq X16M.exe"^), close it, and rerun this script.
+    exit /b 1
+)
+
+call "%SCRIPT_DIR%register-mcp.bat"
 
 endlocal

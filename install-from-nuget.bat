@@ -9,4 +9,6 @@ if %errorlevel%==0 (
     dotnet tool install -g bitmagic.x16m
 )
 
+call "%~dp0register-mcp.bat"
+
 endlocal

@@ -47,6 +47,14 @@ public sealed class DapSession : IDisposable
     private readonly X16DConnection? _connection;
     private readonly object _gate = new();
 
+    // Serializes EnsureSessionAsync's own check-then-attach: MCP can dispatch a batch of tool
+    // calls concurrently, and without this, several calls that all observe IsActive == false at
+    // once would all race into Attach() - only the first to reach Attach's own lock actually
+    // attaches, and every other racer hits Attach's "already running" guard, even though none of
+    // them ever called attach_to_session themselves. Re-checking IsActive after acquiring this
+    // turns those losers into no-ops instead of spurious errors.
+    private readonly SemaphoreSlim _ensureSessionLock = new(1, 1);
+
     // Serializes continue/step calls: DAP only supports one outstanding execution-control
     // operation at a time. Without this, two overlapping calls (MCP can dispatch tool calls
     // concurrently) would both write _pendingStop, the second clobbering the first's
@@ -126,11 +134,23 @@ public sealed class DapSession : IDisposable
         if (IsActive)
             return;
 
-        var found = FindConnectionInfo(Directory.GetCurrentDirectory());
-        if (found is null)
-            throw new McpException("No active debug session. Call launch_project to start one, or make sure VSCode has a debug session running.");
+        await _ensureSessionLock.WaitAsync();
+        try
+        {
+            // Someone else's EnsureSessionAsync may have already attached while we waited.
+            if (IsActive)
+                return;
 
-        await Attach(found.Value.host, found.Value.port);
+            var found = FindConnectionInfo(Directory.GetCurrentDirectory());
+            if (found is null)
+                throw new McpException("No active debug session. Call launch_project to start one, or make sure VSCode has a debug session running.");
+
+            await Attach(found.Value.host, found.Value.port);
+        }
+        finally
+        {
+            _ensureSessionLock.Release();
+        }
     }
 
     // Attaches to a session someone else (VSCode) already launched and owns, e.g. on X16D's
