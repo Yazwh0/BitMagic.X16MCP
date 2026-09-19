@@ -2,3 +2,6 @@
 **/bin/**
 **/obj/**
 *.user
+/nupkg-local/
+/x16d-win-x64/
+/x16d-linux-x64/

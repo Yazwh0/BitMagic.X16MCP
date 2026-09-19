@@ -82,7 +82,7 @@ public static class InspectionTools
     }
 
     [McpServerTool(Name = "evaluate", ReadOnly = true, Destructive = false, Idempotent = true)]
-    [Description("Evaluates an expression in the debugger's expression language (registers, symbols, memory, etc.) in the context of a stack frame.")]
+    [Description("Evaluates an expression in the debugger's expression language: named symbols (e.g. 'Main:MyProc:counter', see get_variables), registers, and arithmetic. To read a byte at a runtime-computed address that isn't a named symbol, use peek(address) - e.g. peek(0x9A04) reads Main RAM; peek(address, space) reads another space (same names as read_memory's memoryReference: 'vram', 'sdcard', 'sdcardblock', 'nvram', 'rambank_<N>', 'rombank_<N>').")]
     public static async Task<string> Evaluate(
         DapSession session,
         [Description("Expression to evaluate.")] string expression,
@@ -92,11 +92,19 @@ public static class InspectionTools
         return response.Result;
     }
 
+    // Space names shared verbatim across read_memory/write_memory/search_memory - keep the
+    // wording consistent so callers can pattern-match between them.
+    private const string MemorySpaceDescription =
+        "Memory space to read/write, not an address: 'main' (CPU-addressable RAM/ROM - use this " +
+        "for game state, tile data, sprite attributes etc., the same address space code and " +
+        "disassembly use), 'vram' (VERA video RAM), 'sdcard', 'sdcardblock', 'nvram', " +
+        "'rambank_<N>', or 'rombank_<N>'. The actual address goes in the separate address parameter.";
+
     [McpServerTool(Name = "disassemble", ReadOnly = true, Destructive = false, Idempotent = true)]
-    [Description("Disassembles instructions starting at a memory reference.")]
+    [Description("Disassembles instructions in CPU-addressable memory (banking is resolved automatically from the address, like the 'main' space in read_memory) starting at a given address.")]
     public static async Task<string> Disassemble(
         DapSession session,
-        [Description("Memory reference to start disassembling from, e.g. an address like '0x0810' or an expression the target understands.")] string memoryReference,
+        [Description("Address to start disassembling from, as hex digits with an optional '0x' prefix, e.g. '0810' or '0x0810'. Do not use a '$' prefix here.")] string memoryReference,
         [Description("Number of instructions to disassemble.")] int instructionCount = 20)
     {
         var response = await session.Disassemble(memoryReference, instructionCount);
@@ -107,26 +115,61 @@ public static class InspectionTools
         return string.Join(Environment.NewLine, lines);
     }
 
+    // address is a string, not an int: a JSON number can't be written as "0x9A04" - a caller
+    // that follows the hex examples in these descriptions literally would fail to even form a
+    // valid tool call against an int-typed parameter, with no useful error surfacing (MCP
+    // parameter-binding failures happen before McpException-based error handling ever runs).
+    private const string AddressDescription = "Address within that space, as decimal (e.g. '39428') or hex with a '0x' or '$' prefix (e.g. '0x9A04' or '$9A04').";
+
+    private static bool TryParseAddress(string input, out int address)
+    {
+        var trimmed = input.Trim();
+
+        if (trimmed.StartsWith("$"))
+            return int.TryParse(trimmed[1..], System.Globalization.NumberStyles.HexNumber, null, out address);
+
+        if (trimmed.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+            return int.TryParse(trimmed[2..], System.Globalization.NumberStyles.HexNumber, null, out address);
+
+        return int.TryParse(trimmed, out address);
+    }
+
     [McpServerTool(Name = "read_memory", ReadOnly = true, Destructive = false, Idempotent = true)]
-    [Description("Reads raw bytes starting at a memory reference, returned as base64 (per DAP's readMemory response).")]
+    [Description("Reads raw bytes from a memory space at a given address, returned as base64. To read a known address like $9A04 in Main RAM, use memoryReference 'main' with address '0x9A04' (or '39428').")]
     public static async Task<string> ReadMemory(
         DapSession session,
-        [Description("Memory reference to start reading from, e.g. an address like '0x0810'.")] string memoryReference,
+        [Description(MemorySpaceDescription)] string memoryReference,
+        [Description(AddressDescription)] string address,
         [Description("Number of bytes to read.")] int count)
     {
-        var response = await session.ReadMemory(memoryReference, count);
+        if (!TryParseAddress(address, out var addressValue))
+            return $"Could not parse address '{address}'. " + AddressDescription;
+
+        var response = await session.ReadMemory(memoryReference, count, addressValue);
+
+        if (string.IsNullOrEmpty(response.Data) || response.UnreadableBytes >= count)
+            return $"No data returned - either '{memoryReference}' isn't a recognised memory space, or address 0x{addressValue:X4} is out of range for it. " + MemorySpaceDescription;
+
         return $"address: {response.Address}, data (base64): {response.Data}";
     }
 
     [McpServerTool(Name = "write_memory", ReadOnly = false, Destructive = true, Idempotent = false)]
-    [Description("Writes raw bytes starting at a memory reference, to amend live state (e.g. poke a value to test a theory). Available even when attached to a session you don't own, since it amends state rather than controlling execution - unlike set_breakpoints/continue_execution/step_*.")]
+    [Description("Writes raw bytes to a memory space at a given address, to amend live state (e.g. poke a value to test a theory). Available even when attached to a session you don't own, since it amends state rather than controlling execution - unlike set_breakpoints/continue_execution/step_*.")]
     public static async Task<string> WriteMemory(
         DapSession session,
-        [Description("Memory reference to start writing to, e.g. an address like '0x0810'.")] string memoryReference,
+        [Description(MemorySpaceDescription)] string memoryReference,
+        [Description(AddressDescription)] string address,
         [Description("Bytes to write (each 0-255), starting at that address.")] byte[] data)
     {
-        var response = await session.WriteMemory(memoryReference, data);
-        return $"Wrote {response.BytesWritten} of {data.Length} byte(s) at offset {response.Offset}.";
+        if (!TryParseAddress(address, out var addressValue))
+            return $"Could not parse address '{address}'. " + AddressDescription;
+
+        var response = await session.WriteMemory(memoryReference, data, addressValue);
+
+        if (response.BytesWritten == 0 && data.Length > 0)
+            return $"Wrote nothing - either '{memoryReference}' isn't a recognised memory space, or address 0x{addressValue:X4} is out of range for it. " + MemorySpaceDescription;
+
+        return $"Wrote {response.BytesWritten} of {data.Length} byte(s) at address {response.Offset}.";
     }
 
     [McpServerTool(Name = "search_memory", ReadOnly = true, Destructive = false, Idempotent = true)]

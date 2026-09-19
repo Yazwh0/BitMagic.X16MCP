@@ -507,18 +507,19 @@ public sealed class DapSession : IDisposable
         return _host!.SendRequestSync(new DisassembleRequest(memoryReference, instructionCount));
     }
 
-    public async Task<ReadMemoryResponse> ReadMemory(string memoryReference, int count)
+    public async Task<ReadMemoryResponse> ReadMemory(string memoryReference, int count, int offset = 0)
     {
         await EnsureSessionAsync();
-        return _host!.SendRequestSync(new ReadMemoryRequest(memoryReference, count));
+        var request = new ReadMemoryRequest(memoryReference, count) { Offset = offset };
+        return _host!.SendRequestSync(request);
     }
 
     // Available in both spawn/launch and attach mode - amending memory isn't a control-flow
     // operation, so it's not restricted the way SetBreakpoints/Continue/Step are.
-    public async Task<WriteMemoryResponse> WriteMemory(string memoryReference, byte[] data)
+    public async Task<WriteMemoryResponse> WriteMemory(string memoryReference, byte[] data, int offset = 0)
     {
         await EnsureSessionAsync();
-        var request = new WriteMemoryRequest(memoryReference, Convert.ToBase64String(data));
+        var request = new WriteMemoryRequest(memoryReference, Convert.ToBase64String(data)) { Offset = offset };
         return _host!.SendRequestSync(request);
     }
 
