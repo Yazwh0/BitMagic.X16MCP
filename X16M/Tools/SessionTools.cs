@@ -22,13 +22,14 @@ public static class SessionTools
     }
 
     [McpServerTool(Name = "launch_project", ReadOnly = false, Destructive = true, Idempotent = false)]
-    [Description("Launches an X16 debug session against a BitMagic project (a .json project file, or a .bmasm source file directly). Strongly prefer passing breakpoints here rather than calling set_breakpoints afterward: some targets run to completion in well under a second once launched, faster than a separate follow-up tool call can land, so breakpoints given here are queued immediately behind the launch request itself (the same way VS Code's own DAP client does it) instead of racing the target's own execution speed.")]
+    [Description("Launches an X16 debug session against a BitMagic project (a .json project file, or a .bmasm source file directly). Stops the target right at its entry point by default (stopOnEntry), so this call itself reports \"Stopped\" rather than \"Still running\" - the recommended flow from here is set_breakpoints, then continue_execution. If you pass stopOnEntry: false instead, strongly prefer passing breakpoints here too rather than a follow-up set_breakpoints call: some targets run to completion in well under a second once launched, faster than a separate tool call can land, so breakpoints given here are queued immediately behind the launch request itself (the same way VS Code's own DAP client does it) instead of racing the target's own execution speed.")]
     public static async Task<string> LaunchProject(
         DapSession session,
         [Description("Path to the project's .json file (or a .bmasm file) to launch.")] string projectPath,
-        [Description("Breakpoints to set before the target starts running. Strongly recommended over a follow-up set_breakpoints call - see this tool's own description for why.")] BreakpointSpec[]? breakpoints = null)
+        [Description("Breakpoints to set before the target starts running. With the default stopOnEntry: true these aren't needed to avoid a race (nothing runs until continue_execution), but still useful to have verified and ready before the first continue.")] BreakpointSpec[]? breakpoints = null,
+        [Description("Stop the target at its very first instruction, before anything runs. On by default so you get a safe moment to inspect state and set breakpoints; pass false to let it start running immediately instead.")] bool stopOnEntry = true)
     {
-        var outcome = await session.Launch(projectPath, breakpoints);
+        var outcome = await session.Launch(projectPath, breakpoints, stopOnEntry: stopOnEntry);
 
         var result = "";
         if (outcome.RomWarning is not null)

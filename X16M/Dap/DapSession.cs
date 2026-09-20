@@ -216,7 +216,7 @@ public sealed class DapSession : IDisposable
         }
     }
 
-    public async Task<LaunchOutcome> Launch(string projectPath, IReadOnlyList<BreakpointSpec>? initialBreakpoints = null, string? workingDirectory = null)
+    public async Task<LaunchOutcome> Launch(string projectPath, IReadOnlyList<BreakpointSpec>? initialBreakpoints = null, string? workingDirectory = null, bool stopOnEntry = true)
     {
         var launchCompletion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var initialBreakpointResults = new List<Breakpoint>();
@@ -308,6 +308,7 @@ public sealed class DapSession : IDisposable
                 {
                     ["program"] = projectPath,
                     ["cwd"] = _projectDirectory,
+                    ["stopOnEntry"] = stopOnEntry,
                 },
             };
 
@@ -499,6 +500,73 @@ public sealed class DapSession : IDisposable
         return SendSetBreakpoints(file, lines);
     }
 
+    // Same category as SetBreakpoints - configuring what causes a stop - so restricted the same
+    // way: only the owning session should change it, not an attach_to_session connection watching
+    // one VSCode already owns.
+    public async Task<IReadOnlyList<Breakpoint>> SetExceptionBreakpoints(IReadOnlyList<string> filters)
+    {
+        await EnsureSessionAsync();
+        RequireNotAttached("set_exception_breakpoints");
+
+        var request = new SetExceptionBreakpointsRequest(filters.ToList());
+        var response = _host!.SendRequestSync(request);
+        return response.Breakpoints;
+    }
+
+    // A read, like GetStackTrace/Evaluate - available in attach mode too.
+    public async Task<ExceptionInfoResponse> GetExceptionInfo(int threadId = 1)
+    {
+        await EnsureSessionAsync();
+        return _host!.SendRequestSync(new ExceptionInfoRequest(threadId));
+    }
+
+    // Independent of SetBreakpoints' source-line breakpoints - same restriction, same reason.
+    public async Task<IReadOnlyList<Breakpoint>> SetInstructionBreakpoints(IReadOnlyList<string> addresses)
+    {
+        await EnsureSessionAsync();
+        RequireNotAttached("set_instruction_breakpoints");
+
+        var request = new SetInstructionBreakpointsRequest(addresses.Select(a => new InstructionBreakpoint(a)).ToList());
+        var response = _host!.SendRequestSync(request);
+        return response.Breakpoints;
+    }
+
+    // DAP's setFunctionBreakpoints, repurposed server-side (BreakpointManager.HandleFunctionBreakpointsRequest)
+    // for X16 hardware breakpoints (vram(...)/vsync(...) expressions) rather than named functions.
+    public async Task<IReadOnlyList<Breakpoint>> SetHardwareBreakpoints(IReadOnlyList<string> expressions)
+    {
+        await EnsureSessionAsync();
+        RequireNotAttached("set_hardware_breakpoints");
+
+        var request = new SetFunctionBreakpointsRequest(expressions.Select(e => new FunctionBreakpoint(e)).ToList());
+        var response = _host!.SendRequestSync(request);
+        return response.Breakpoints;
+    }
+
+    public async Task<PaletteRequestResponse> GetPalette()
+    {
+        await EnsureSessionAsync();
+        return _host!.SendRequestSync(new PaletteRequest());
+    }
+
+    // First call (locations: null) scans the whole "main" space fresh. Pass the previous
+    // response's Locations straight back to narrow down with a different searchType - the classic
+    // "Cheat Engine" style value-scanning workflow. Location is an opaque id (it encodes which RAM
+    // bank a match came from for banked addresses) - round-trip it, don't try to use it as a plain
+    // address elsewhere.
+    public async Task<MemoryValueTrackerResponse> FindMemoryValue(uint toFind, string searchType, string searchWidth, IReadOnlyList<MemoryValueDto>? locations)
+    {
+        await EnsureSessionAsync();
+
+        var request = new MemoryValueTrackerRequest();
+        request.Args.ToFind = toFind;
+        request.Args.SearchType = searchType;
+        request.Args.SearchWidth = searchWidth;
+        request.Args.Locations = locations?.ToArray();
+
+        return _host!.SendRequestSync(request);
+    }
+
     // Shared by SetBreakpoints and Launch(initialBreakpoints:) - the latter calls this directly
     // (session is already active by then) immediately after sending launch, before
     // configurationDone, so the breakpoint is queued as close to VS Code's own pipelined
@@ -547,6 +615,12 @@ public sealed class DapSession : IDisposable
 
     public Task<StopOutcome> StepOutAsync(int threadId = 1, TimeSpan? timeout = null)
         => SendAndWaitForStop(() => _host!.SendRequestSync(new StepOutRequest(threadId)), timeout);
+
+    // Unlike Continue/Step, Pause doesn't wait for a request-side action to trigger the stop -
+    // the target's already running freely, so the very next StoppedEvent to arrive after this is
+    // sent (there's nothing else that would produce one) is the pause taking effect.
+    public Task<StopOutcome> PauseAsync(int threadId = 1, TimeSpan? timeout = null)
+        => SendAndWaitForStop(() => _host!.SendRequestSync(new PauseRequest(threadId)), timeout);
 
     public async Task<StackTraceResponse> GetStackTrace(int threadId = 1, int startFrame = 0, int levels = 20)
     {

@@ -27,6 +27,11 @@ public static class ExecutionTools
     public static async Task<string> StepOut(DapSession session, int threadId = 1)
         => Describe(await session.StepOutAsync(threadId));
 
+    [McpServerTool(Name = "pause", ReadOnly = false, Destructive = false, Idempotent = false)]
+    [Description("Pauses a running target immediately and waits for the resulting stop, rather than waiting for a breakpoint or exception to do it. Useful right after launch_project when the target is just running freely with nothing else set to stop it, or any time you want to look at current state without waiting for a specific condition.")]
+    public static async Task<string> Pause(DapSession session, int threadId = 1)
+        => Describe(await session.PauseAsync(threadId));
+
     internal static string Describe(StopOutcome outcome)
     {
         if (outcome.StillRunning)

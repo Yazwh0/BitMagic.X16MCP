@@ -152,9 +152,9 @@ public static class InspectionTools
     // is consistent with the client being unable to form a call against a type-less schema at
     // all, not with anything our own parsing logic could catch. A plain string is something
     // every client can always produce (numbers stringify trivially), and we parse it ourselves.
-    private const string AddressDescription = "Address within that space, as decimal (e.g. \"39428\") or hex with a '0x' or '$' prefix (e.g. \"0x9A04\" or \"$9A04\").";
+    internal const string AddressDescription = "Address within that space, as decimal (e.g. \"39428\") or hex with a '0x' or '$' prefix (e.g. \"0x9A04\" or \"$9A04\").";
 
-    private static bool TryParseAddress(string address, out int value)
+    internal static bool TryParseAddress(string address, out int value)
     {
         var trimmed = address.Trim();
 
@@ -260,5 +260,53 @@ public static class InspectionTools
         }
 
         return (Convert.ToBase64String(System.Text.Encoding.Latin1.GetBytes(trimmed)), true);
+    }
+
+    [McpServerTool(Name = "get_palette", ReadOnly = true, Destructive = false, Idempotent = true)]
+    [Description("Returns the current VERA palette: 256 entries, both as fully-resolved 8-bit RGBA colours (what's actually rendered) and as the raw 4-bit-per-channel values VERA itself stores in palette RAM.")]
+    public static async Task<string> GetPalette(DapSession session)
+    {
+        var response = await session.GetPalette();
+
+        if (response.DisplayPalette is null || response.DisplayPalette.Count == 0)
+            return "No palette data returned.";
+
+        var lines = new List<string> { "index  display (RGBA)     raw VERA (4-bit R,G,B)" };
+        for (var i = 0; i < response.DisplayPalette.Count; i++)
+        {
+            var display = response.DisplayPalette[i];
+            var raw = response.Palette != null && i < response.Palette.Count ? response.Palette[i] : null;
+
+            lines.Add($"{i,3}    #{display.R:X2}{display.G:X2}{display.B:X2}{display.A:X2}    {(raw is null ? "-" : $"{raw.R:X1},{raw.G:X1},{raw.B:X1}")}");
+        }
+
+        return string.Join(Environment.NewLine, lines);
+    }
+
+    [McpServerTool(Name = "find_memory_value", ReadOnly = false, Destructive = false, Idempotent = false)]
+    [Description("Scans the \"main\" address space (all RAM banks) for a value, \"Cheat Engine\" style - the way to find where an unknown game variable (health, score, a counter) lives without knowing its address. First call with no locations to scan fresh for a value - this walks every RAM bank and takes roughly 30-60s regardless of which value or searchType you pick, so only call it once per hunt, not repeatedly. To narrow down, take the locations array that call returned, let the target run a bit (or change something in-game), then call again passing that same locations array back with a new searchType comparing each one's current value to what it held last time (e.g. \"Changed\", \"Gone Up\") - repeat until only the address you want is left; these narrowing calls only re-check the locations you pass in, so they're fast. A \"location\" in the result is an opaque id, not a plain CPU address; it round-trips into the next call but isn't valid input to read_memory/write_memory.")]
+    public static async Task<string> FindMemoryValue(
+        DapSession session,
+        [Description("Value to search for (searchType \"Equal\"/\"Not Equal\"/etc.) - ignored when searchType is \"Changed\"/\"Not Changed\"/\"Gone Up\"/\"Gone Down\", which compare against each location's previous value instead.")] uint value,
+        [Description("\"Equal\", \"Not Equal\", \"Less Than\", \"Greater Than\" (all compare against the value parameter), or - only valid on a narrowing call that passes locations back - \"Changed\", \"Not Changed\", \"Gone Up\", \"Gone Down\" (compare against each location's previous value).")] string searchType,
+        [Description("\"Byte\" (0-255) or \"Word\" (0-65535, little-endian).")] string searchWidth,
+        [Description("Omit for a fresh scan. On a narrowing call, pass back exactly the locations array the previous call returned.")] MemoryValueDto[]? locations = null)
+    {
+        if (searchType is not ("Equal" or "Not Equal" or "Less Than" or "Greater Than" or "Changed" or "Not Changed" or "Gone Up" or "Gone Down"))
+            return $"Unknown searchType '{searchType}'. Use \"Equal\", \"Not Equal\", \"Less Than\", \"Greater Than\", \"Changed\", \"Not Changed\", \"Gone Up\", or \"Gone Down\".";
+
+        if (searchWidth is not ("Byte" or "Word"))
+            return $"Unknown searchWidth '{searchWidth}'. Use \"Byte\" or \"Word\".";
+
+        var response = await session.FindMemoryValue(value, searchType, searchWidth, locations);
+
+        if (response.Locations is null || response.Locations.Count == 0)
+            return "No matches found.";
+
+        if (response.Locations.Count > 200)
+            return $"{response.Locations.Count} matches - too many to be useful yet. Narrow down further before inspecting individual locations.";
+
+        return $"{response.Locations.Count} match(es):" + Environment.NewLine +
+            string.Join(Environment.NewLine, response.Locations.Select(l => $"location {l.Location}: value {l.Value}"));
     }
 }
