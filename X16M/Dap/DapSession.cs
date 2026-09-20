@@ -616,6 +616,33 @@ public sealed class DapSession : IDisposable
         return _host!.SendRequestSync(request);
     }
 
+    // Amending input isn't a control-flow operation (unlike Continue/Step), so - like
+    // WriteMemory - it's available in both spawn/launch and attach mode.
+    public async Task<KeyboardInputRequestResponse> SendKey(string key, bool down)
+    {
+        await EnsureSessionAsync();
+
+        var request = new KeyboardInputRequest();
+        request.Args.Key = key;
+        request.Args.Down = down;
+
+        return _host!.SendRequestSync(request);
+    }
+
+    public async Task<MouseInputRequestResponse> SendMouse(int deltaX, int deltaY, bool left, bool right, bool middle)
+    {
+        await EnsureSessionAsync();
+
+        var request = new MouseInputRequest();
+        request.Args.DeltaX = deltaX;
+        request.Args.DeltaY = deltaY;
+        request.Args.Left = left;
+        request.Args.Right = right;
+        request.Args.Middle = middle;
+
+        return _host!.SendRequestSync(request);
+    }
+
     public async Task<LayerRequestResponse> GetLayers()
     {
         await EnsureSessionAsync();
