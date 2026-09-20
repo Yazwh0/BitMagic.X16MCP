@@ -364,6 +364,66 @@ public sealed class DapSession : IDisposable
         return new LaunchOutcome(stop, initialBreakpointResults, romWarning);
     }
 
+    /// <summary>
+    /// Runs `X16D --buildOnly` as a one-shot child process to compile a project (.json) or a
+    /// single .bmasm/.asm source file, then exits - no ROM load, no DAP handshake, nothing run.
+    /// outputFolder is where the compiled program (.prg etc) is written; binFolder is just the
+    /// template engine's intermediate artifacts, not the compiled program itself. Spawns its own
+    /// separate X16D process and touches none of this session's own state (_process/_host/etc.),
+    /// so it's safe to call regardless of whether a session from Launch/Attach is currently active.
+    /// </summary>
+    public async Task<(int ExitCode, string Output)> Build(string target, string? buildFolder = null, string? outputFolder = null, string? binFolder = null)
+    {
+        if (_connection is not X16DConnection.Spawn spawn)
+            throw new McpException("build_project needs X16M to be configured with --x16d/X16D_PATH (a local X16D.exe to spawn) - it can't run over a TCP connection to an already-running X16D.");
+
+        if (!File.Exists(spawn.ExecutablePath))
+            throw new McpException($"X16D executable not found at '{spawn.ExecutablePath}'.");
+
+        if (!File.Exists(target))
+            throw new McpException($"Build target not found at '{target}'.");
+
+        var folder = buildFolder ?? Path.GetDirectoryName(Path.GetFullPath(target)) ?? Environment.CurrentDirectory;
+
+        var psi = new ProcessStartInfo
+        {
+            FileName = spawn.ExecutablePath,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            WorkingDirectory = Path.GetDirectoryName(Path.GetFullPath(spawn.ExecutablePath)) ?? Environment.CurrentDirectory,
+        };
+        psi.ArgumentList.Add("--buildOnly");
+        psi.ArgumentList.Add("--buildTarget");
+        psi.ArgumentList.Add(target);
+        psi.ArgumentList.Add("--buildFolder");
+        psi.ArgumentList.Add(folder);
+        if (!string.IsNullOrWhiteSpace(outputFolder))
+        {
+            psi.ArgumentList.Add("--outputFolder");
+            psi.ArgumentList.Add(outputFolder);
+        }
+        if (!string.IsNullOrWhiteSpace(binFolder))
+        {
+            psi.ArgumentList.Add("--binFolder");
+            psi.ArgumentList.Add(binFolder);
+        }
+
+        using var process = Process.Start(psi) ?? throw new McpException("Failed to start X16D.");
+
+        var stdoutTask = process.StandardOutput.ReadToEndAsync();
+        var stderrTask = process.StandardError.ReadToEndAsync();
+
+        await process.WaitForExitAsync();
+
+        var stdout = (await stdoutTask).Trim();
+        var stderr = (await stderrTask).Trim();
+        var output = stderr.Length == 0 ? stdout : $"{stdout}{Environment.NewLine}{stderr}".Trim();
+
+        return (process.ExitCode, output);
+    }
+
     private static string? CheckRomWarning(string x16dExecutablePath)
     {
         var x16dDirectory = Path.GetDirectoryName(Path.GetFullPath(x16dExecutablePath)) ?? "";

@@ -60,7 +60,11 @@ internal static class Program
                 "integration); this server's tools there are only for reading and amending " +
                 "X16-specific state (memory, sprites, palette, layers, CPU history), not for " +
                 "driving execution - those calls fail with a clear error explaining that. The two " +
-                "modes are mutually exclusive per session - call disconnect before switching.")
+                "modes are mutually exclusive per session - call disconnect before switching. " +
+                "build_project is the one exception to all of the above: it just compiles a " +
+                "project or a single .bmasm/.asm file and reports errors, with no session, ROM, " +
+                "or emulator involved at all - use it as a fast compile-check loop while writing " +
+                "bmasm, independent of whatever launch_project/attach_to_session state exists.")
             .WithStdioServerTransport()
             .WithToolsFromAssembly()
             .WithResourcesFromAssembly();

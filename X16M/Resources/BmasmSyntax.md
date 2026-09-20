@@ -259,8 +259,17 @@ BM.X16Header();
 
 ## X16 hardware itself (not a bmasm concern)
 
-This reference is the `.bmasm`/Template Engine *language*. For the X16's own memory map, VERA
-registers, KERNAL routine addresses and I/O layout, that's not BitMagic-specific - go to the
-[X16Community docs](https://github.com/X16Community/x16-docs), the
-[X16 forums](https://cx16forum.com/forum/), or the project's Discord. `App`-level constant names
-(register names etc.) that BitMagic exposes are generated from those same sources.
+This reference is the `.bmasm`/Template Engine *language*. For the machine itself - screen
+geometry (where `0,0` is, resolution, layers, tiles, sprites), the memory map, KERNAL routine
+addresses, I/O and sound - that's not BitMagic-specific; it comes from the
+[X16Community docs](https://github.com/X16Community/x16-docs/tree/master). `App`-level constant
+names (register names etc.) that BitMagic exposes are generated from those same sources. Most
+relevant pages:
+
+- [VERA Programmer's Reference](https://github.com/X16Community/x16-docs/blob/master/X16%20Reference%20-%2009%20-%20VERA%20Programmer's%20Reference.md) - display geometry/origin, layers, tiles, sprites, palette.
+- [Memory Map](https://github.com/X16Community/x16-docs/blob/master/X16%20Reference%20-%2008%20-%20Memory%20Map.md) - what lives at which address, zero page, banking.
+- [KERNAL](https://github.com/X16Community/x16-docs/blob/master/X16%20Reference%20-%2005%20-%20KERNAL.md) - the routines this reference's `BSOUT`/`PRIMM` examples call into.
+- [I/O Programming](https://github.com/X16Community/x16-docs/blob/master/X16%20Reference%20-%2012%20-%20IO%20Programming.md) - VIA, I2C, SD card, UART.
+- [VERA FX Reference](https://github.com/X16Community/x16-docs/blob/master/X16%20Reference%20-%2010%20-%20VERA%20FX%20Reference.md) - the FX unit's accelerated blitting/math operations.
+
+Or the [X16 forums](https://cx16forum.com/forum/) / project Discord for anything not covered there.
