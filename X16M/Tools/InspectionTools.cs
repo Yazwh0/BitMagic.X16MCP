@@ -28,7 +28,7 @@ public static class InspectionTools
     private const int MaxLines = 300;
 
     [McpServerTool(Name = "get_variables", ReadOnly = true, Destructive = false, Idempotent = true)]
-    [Description("Lists every variable in a debug scope as an indented tree, e.g. 'Globals' for every variable the compiler knows about across the whole program (nested exactly as you'd type it into evaluate, e.g. a line \"NestedProc\" under \"MyProc\" under \"Main\" means Main:MyProc:NestedProc:someVar), 'Locals' for the current stack frame's variables, or any hardware scope (CPU, VERA, VERA Audio, VERA FX, Kernal, Display, I2C, SMC, UART, RTC, VIA, SD Card). Call this with no scopeName first to see the available scope names. Some hardware scopes (e.g. VERA) are large - the default depth is deliberately shallow and the result is capped at 300 lines; pass a smaller maxDepth to narrow it down or evaluate a specific path directly once you know it.")]
+    [Description("Lists every variable in a debug scope as an indented tree of 'name: type = value' lines, where the type carries the variable's memory location for program symbols, e.g. 'counter: byte ($0810) = 5' lives at $0810 (use that address with read_memory/write_memory on 'main'). Scopes include 'Globals' for every variable the compiler knows about across the whole program (nested exactly as you'd type it into evaluate, e.g. a line \"NestedProc\" under \"MyProc\" under \"Main\" means Main:MyProc:NestedProc:someVar), 'Locals' for the current stack frame's variables, or any hardware scope (CPU, VERA, VERA Audio, VERA FX, Kernal, Display, I2C, SMC, UART, RTC, VIA, SD Card). Call this with no scopeName first to see the available scope names. Some hardware scopes (e.g. VERA) are large - the default depth is deliberately shallow and the result is capped at 300 lines; pass a smaller maxDepth to narrow it down or evaluate a specific path directly once you know it.")]
     public static async Task<string> GetVariables(
         DapSession session,
         [Description("Scope name, e.g. 'Globals' or 'Locals'. Omit to just list the available scope names.")] string? scopeName = null,
@@ -70,7 +70,13 @@ public static class InspectionTools
             if (lines.Count >= MaxLines)
                 return false;
 
-            lines.Add($"{indent}{v.Name} = {v.Value}");
+            // X16D puts a symbol's address in Type, e.g. "byte ($0810)" - the same text VSC shows
+            // beside the value - so keep it rather than just the value. MemoryReference is set on
+            // nodes backed by a whole memory space (e.g. "vram"), usable as read_memory's space.
+            var type = string.IsNullOrEmpty(v.Type) ? "" : $": {v.Type}";
+            var memory = string.IsNullOrEmpty(v.MemoryReference) ? "" : $" [memoryReference: {v.MemoryReference}]";
+
+            lines.Add($"{indent}{v.Name}{type} = {v.Value}{memory}");
 
             if (v.VariablesReference != 0 && depth < maxDepth)
             {
@@ -196,7 +202,10 @@ public static class InspectionTools
         DapSession session,
         [Description(MemorySpaceDescription)] string memoryReference,
         [Description(AddressDescription)] string address,
-        [Description("Bytes to write (each 0-255), starting at that address.")] byte[] data,
+        // int[] rather than byte[]: System.Text.Json (and so the generated tool schema) treats
+        // byte[] as a base64 string, whereas callers want to pass a plain JSON array of numbers.
+        // DapSession.WriteMemory does the base64 encoding the DAP writeMemory request needs.
+        [Description("Bytes to write, as a JSON array of numbers each 0-255 (e.g. [169, 1, 141, 0, 159]), starting at that address.")] int[] data,
         [Description(BankDescription)] int? bank = null)
     {
         if (!TryParseAddress(address, out var addressValue))
@@ -205,7 +214,13 @@ public static class InspectionTools
         if (!TryResolveMemoryReference(memoryReference, bank, out var resolvedReference, out var referenceError))
             return referenceError!;
 
-        var response = await session.WriteMemory(resolvedReference, data, addressValue);
+        var badIndex = Array.FindIndex(data, b => b is < 0 or > 255);
+        if (badIndex >= 0)
+            return $"data[{badIndex}] is {data[badIndex]}, but every value must be a byte (0-255).";
+
+        var bytes = data.Select(b => (byte)b).ToArray();
+
+        var response = await session.WriteMemory(resolvedReference, bytes, addressValue);
 
         if (response.BytesWritten == 0 && data.Length > 0)
             return $"Wrote nothing - either '{memoryReference}' isn't a recognised memory space, or address 0x{addressValue:X4} is out of range for it. " + MemorySpaceDescription;
