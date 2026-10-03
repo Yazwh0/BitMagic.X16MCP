@@ -73,7 +73,9 @@ rem uninstall silently fails - e.g. a running X16M.exe still has the old files l
 rem below would otherwise just say "already installed" and quietly leave the OLD build in place.
 rem Not swallowing uninstall's output means that failure is visible instead of silent.
 dotnet tool uninstall -g bitmagic.x16m
-dotnet tool install -g bitmagic.x16m --add-source "%OUT%"
+rem --add-source adds to (not replaces) nuget.org, and install picks the highest version across
+rem all sources, so without pinning the published release always wins over the local 0.1.0.
+dotnet tool install -g bitmagic.x16m --add-source "%OUT%" --version 0.1.0
 if errorlevel 1 (
     echo.
     echo Install failed - this usually means uninstall above couldn't remove the old files.
