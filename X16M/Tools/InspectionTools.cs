@@ -27,8 +27,14 @@ public static class InspectionTools
     private const int DefaultMaxDepth = 3;
     private const int MaxLines = 300;
 
+    // Symbols from other compilers use BitMagic's naming, the details for each compiler are in the other-compilers
+    // resource (Resources/OtherCompilers.md) so these descriptions don't grow with each one. Shared by get_variables
+    // and evaluate.
+    private const string OtherCompilers =
+        " For a program built by another compiler (eg ca65), read the docs://other-compilers resource for how its symbols are named and typed.";
+
     [McpServerTool(Name = "get_variables", ReadOnly = true, Destructive = false, Idempotent = true)]
-    [Description("Lists every variable in a debug scope as an indented tree of 'name: type = value' lines, where the type carries the variable's memory location for program symbols, e.g. 'counter: byte ($0810) = 5' lives at $0810 (use that address with read_memory/write_memory on 'main'). Scopes include 'Globals' for every variable the compiler knows about across the whole program (nested exactly as you'd type it into evaluate, e.g. a line \"NestedProc\" under \"MyProc\" under \"Main\" means Main:MyProc:NestedProc:someVar), 'Locals' for the current stack frame's variables, or any hardware scope (CPU, VERA, VERA Audio, VERA FX, Kernal, Display, I2C, SMC, UART, RTC, VIA, SD Card). Call this with no scopeName first to see the available scope names. Some hardware scopes (e.g. VERA) are large - the default depth is deliberately shallow and the result is capped at 300 lines; pass a smaller maxDepth to narrow it down or evaluate a specific path directly once you know it.")]
+    [Description("Lists every variable in a debug scope as an indented tree of 'name: type = value' lines, where the type carries the variable's memory location for program symbols, e.g. 'counter: byte ($0810) = 5' lives at $0810 (use that address with read_memory/write_memory on 'main'). Scopes include 'Globals' for every variable the compiler knows about across the whole program (nested exactly as you'd type it into evaluate, e.g. a line \"NestedProc\" under \"MyProc\" under \"Main\" means Main:MyProc:NestedProc:someVar), 'Locals' for the current stack frame's variables, or any hardware scope (CPU, VERA, VERA Audio, VERA FX, Kernal, Display, I2C, SMC, UART, RTC, VIA, SD Card). Call this with no scopeName first to see the available scope names. Some hardware scopes (e.g. VERA) are large - the default depth is deliberately shallow and the result is capped at 300 lines; pass a smaller maxDepth to narrow it down or evaluate a specific path directly once you know it." + OtherCompilers)]
     public static async Task<string> GetVariables(
         DapSession session,
         [Description("Scope name, e.g. 'Globals' or 'Locals'. Omit to just list the available scope names.")] string? scopeName = null,
@@ -89,7 +95,7 @@ public static class InspectionTools
     }
 
     [McpServerTool(Name = "evaluate", ReadOnly = true, Destructive = false, Idempotent = true)]
-    [Description("Evaluates an expression in the debugger's expression language: named symbols (e.g. 'Main:MyProc:counter', see get_variables), registers, and arithmetic. To read a byte at a runtime-computed address that isn't a named symbol, use peek(address) - e.g. peek(0x9A04) reads Main RAM; peek(address, space) reads another space (same names as read_memory's memoryReference: 'vram', 'sdcard', 'sdcardblock', 'nvram', 'rambank_<N>', 'rombank_<N>').")]
+    [Description("Evaluates an expression in the debugger's expression language: named symbols (e.g. 'Main:MyProc:counter', see get_variables), registers, and arithmetic. To read a byte at a runtime-computed address that isn't a named symbol, use peek(address) - e.g. peek(0x9A04) reads Main RAM; peek(address, space) reads another space (same names as read_memory's memoryReference: 'vram', 'sdcard', 'sdcardblock', 'nvram', 'rambank_<N>', 'rombank_<N>')." + OtherCompilers)]
     public static async Task<string> Evaluate(
         DapSession session,
         [Description("Expression to evaluate.")] string expression,

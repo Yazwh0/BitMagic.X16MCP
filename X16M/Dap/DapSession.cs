@@ -309,6 +309,8 @@ public sealed class DapSession : IDisposable
                     ["program"] = projectPath,
                     ["cwd"] = _projectDirectory,
                     ["stopOnEntry"] = stopOnEntry,
+                    // X16D otherwise takes stepping from the project file's startStepping, the caller's choice must win.
+                    ["stopOnEntryOverride"] = stopOnEntry,
                 },
             };
 

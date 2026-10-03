@@ -19,6 +19,7 @@
        Content so it's always available regardless of how/where X16M ends up installed. -->
   <ItemGroup>
     <EmbeddedResource Include="Resources\BmasmSyntax.md" LogicalName="X16M.Resources.BmasmSyntax.md" />
+    <EmbeddedResource Include="Resources\OtherCompilers.md" LogicalName="X16M.Resources.OtherCompilers.md" />
   </ItemGroup>
 
   <!--
