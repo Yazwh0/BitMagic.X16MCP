@@ -216,7 +216,7 @@ public sealed class DapSession : IDisposable
         }
     }
 
-    public async Task<LaunchOutcome> Launch(string projectPath, IReadOnlyList<BreakpointSpec>? initialBreakpoints = null, string? workingDirectory = null, bool stopOnEntry = true)
+    public async Task<LaunchOutcome> Launch(string projectPath, IReadOnlyList<BreakpointSpec>? initialBreakpoints = null, string? workingDirectory = null, bool stopOnEntry = true, bool muteAudio = true)
     {
         var launchCompletion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var initialBreakpointResults = new List<Breakpoint>();
@@ -311,6 +311,8 @@ public sealed class DapSession : IDisposable
                     ["stopOnEntry"] = stopOnEntry,
                     // X16D otherwise takes stepping from the project file's startStepping, the caller's choice must win.
                     ["stopOnEntryOverride"] = stopOnEntry,
+                    // Overrides the project file's muteAudio. Silences output only, emulation is unaffected.
+                    ["muteAudioOverride"] = muteAudio,
                 },
             };
 

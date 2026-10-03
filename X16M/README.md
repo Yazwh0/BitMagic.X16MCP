@@ -78,7 +78,7 @@ Standard DAP is covered, plus X16-specific tools for VERA layers, sprites and CP
 
 | Tool | Description |
 | ---- | ----------- |
-| `launch_project(projectPath, breakpoints?)` | Launches a project's `.json` file, or a `.bmasm` file directly, and waits for its initial stop before returning. Pass `breakpoints` here rather than a follow-up `set_breakpoints` call: some targets finish in well under a second, faster than a separate tool call can land. |
+| `launch_project(projectPath, breakpoints?, stopOnEntry?, muteAudio?)` | Launches a project's `.json` file, or a `.bmasm` file directly, and waits for its initial stop before returning. Pass `breakpoints` here rather than a follow-up `set_breakpoints` call: some targets finish in well under a second, faster than a separate tool call can land. Audio is muted by default (`muteAudio: true`); this only silences the output, emulation is unaffected. |
 | `set_breakpoints(file, lines[])` | Sets the full set of breakpoints for a file, replacing any previously set there. |
 | `get_breakpoints()` | Reports the current verification state of every breakpoint set so far. `X16D` verifies a breakpoint once its file actually loads, which can happen after `set_breakpoints` or `launch_project` already returned. |
 | `continue_execution()` | Resumes a paused session. |

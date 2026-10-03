@@ -27,9 +27,10 @@ public static class SessionTools
         DapSession session,
         [Description("Path to the project's .json file (or a .bmasm file) to launch.")] string projectPath,
         [Description("Breakpoints to set before the target starts running. With the default stopOnEntry: true these aren't needed to avoid a race (nothing runs until continue_execution), but still useful to have verified and ready before the first continue.")] BreakpointSpec[]? breakpoints = null,
-        [Description("Stop the target at its very first instruction, before anything runs. On by default so you get a safe moment to inspect state and set breakpoints; pass false to let it start running immediately instead.")] bool stopOnEntry = true)
+        [Description("Stop the target at its very first instruction, before anything runs. On by default so you get a safe moment to inspect state and set breakpoints; pass false to let it start running immediately instead.")] bool stopOnEntry = true,
+        [Description("Silence the emulator's audio output. On by default; emulation is unaffected either way, this only stops sound being played. Pass false to hear it.")] bool muteAudio = true)
     {
-        var outcome = await session.Launch(projectPath, breakpoints, stopOnEntry: stopOnEntry);
+        var outcome = await session.Launch(projectPath, breakpoints, stopOnEntry: stopOnEntry, muteAudio: muteAudio);
 
         var result = "";
         if (outcome.RomWarning is not null)
