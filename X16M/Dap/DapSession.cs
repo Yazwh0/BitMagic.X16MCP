@@ -721,6 +721,24 @@ public sealed class DapSession : IDisposable
         return _host!.SendRequestSync(request);
     }
 
+    // Recording observes rather than controls execution, so like input it's available in both
+    // spawn/launch and attach mode.
+    public async Task<StartAudioRecordingRequestResponse> StartAudioRecording(string path)
+    {
+        await EnsureSessionAsync();
+
+        var request = new StartAudioRecordingRequest();
+        request.Args.Path = path;
+
+        return _host!.SendRequestSync(request);
+    }
+
+    public async Task<StopAudioRecordingRequestResponse> StopAudioRecording()
+    {
+        await EnsureSessionAsync();
+        return _host!.SendRequestSync(new StopAudioRecordingRequest());
+    }
+
     public async Task<LayerRequestResponse> GetLayers()
     {
         await EnsureSessionAsync();
