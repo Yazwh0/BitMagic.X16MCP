@@ -44,14 +44,15 @@ Parameters are positional (in the order below) or `name=value`; `_` skips a posi
 | --- | --- | --- |
 | `.segment name [address] [maxsize] [filename] [scope]` | | Opens/switches to a named memory region. Re-naming an existing segment switches to it. |
 | `.endsegment` | | Back to the `Main` segment/scope. |
-| `.scope [name]` | | Opens a named constant scope (flat, doesn't nest; omit `name` for anonymous). |
+| `.scope [public|private] [name]` | | Opens a named constant scope (flat, doesn't nest; omit `name` for anonymous). `private` makes names declared in it private by default; set by the first `.scope` for the name, reopening with the other keyword is an error. |
 | `.endscope` | | Back to the enclosing procedure's scope. |
-| `.proc [name]` | | Named block with its own scope + an entry-point constant (`jmp myproc` works). Nestable. |
+| `.proc [public|private] [name]` | | Named block with its own scope + an entry-point constant (`jmp myproc` works). Nestable. |
 | `.endproc` | | Closes the proc; adds `endproc` pointing just past its code. |
-| `.const name value` | | Named constant. |
-| `.var type name [value]` | | Typed data: reserves space **and writes** the initial value (default `0`). |
-| `.constvar type name [value]` | | Typed alias for a fixed address (hardware register, zero-page slot). Writes nothing. |
-| `.padvar type name` | | Reserves space, writes nothing — for BSS/uninitialised RAM only. |
+| `.const [public|private] name value` | | Named constant. |
+| `.var [public|private] type name [value]` | | Typed data: reserves space **and writes** the initial value (default `0`). |
+| `.constvar [public|private] type name [value]` | | Typed alias for a fixed address (hardware register, zero-page slot). Writes nothing. |
+| `.padvar [public|private] type name` | | Reserves space, writes nothing — for BSS/uninitialised RAM only. |
+| `.export [public|private] name value` | | Public by default, even in a private scope. `value` a single name: an alias (same value and type). `name + n` / `name - n`: that name's type at the new address. Any other expression: a constant. Can open up anything in its own scope, private or not. |
 | `.org address` | | Advance the write position to `address`. Errors if already past it. |
 | `.pad size` | | Advance the write position by `size` bytes. |
 | `.align boundary` | | Advance until the write position is a multiple of `boundary`. |
@@ -90,6 +91,11 @@ Forward references are fine.
 - **Anonymous labels**: `.:` with no name. Reference with a bare `-`/`+` (same repeat rules).
   Unlike a named label, `.:` *can* share its line with an instruction, e.g. `.:	jmp -`.
 - `loop-1` is a valid expression: the address just before `loop`.
+- **Operand labels**: `lda name: $1234` names the operand bytes (instruction + 1) for self-modifying
+  code: a `byte` for a one byte operand, a `ushort` for two. `<name:` / `>name:` are the low / high
+  byte (`>` only on a two byte operand). Several can share one operand.
+- Labels and operand labels are **private** outside their scope (reaching in from another scope
+  with `scope:proc:label` builds with a warning for now); `.export` gives one a public name.
 
 ## Scope and name resolution
 
@@ -102,6 +108,15 @@ usually just write the bare name. Qualify only when ambiguous: `sound:init`,
 `App::counter` (`::` is a wildcard for a skipped middle segment — error if more than one match).
 This is also exactly the syntax the debugger's `evaluate` accepts, e.g.
 `Main:MyProc:NestedProc:someVar`.
+
+**Public and private.** Visibility is for libraries: the scope is the boundary. Everything in a
+scope can use every name in it, labels included. Procs, constants and variables are public
+unless declared `private` (keyword straight after the directive), or the scope was opened with
+`.scope private name`, which makes private the default (`public` overrides it). A private name
+can't be reached from another scope by any path; a private proc hides everything in it. Labels
+are always private outside their scope. `.export name value` makes a public (or `.export
+private`) name for anything in its own scope, or for an expression. `public` / `private` are reserved names. The debugger ignores
+visibility: `evaluate` reaches private names too.
 
 ## Expressions
 
