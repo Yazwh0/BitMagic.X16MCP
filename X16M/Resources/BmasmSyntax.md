@@ -213,6 +213,10 @@ section code                ; procedures
   elsewhere, in any order. To place a library you don't import directly, import it too.
 - Any section name works (`section irq` + `place irq`); only `setup` and `code` have defaults.
   Code that's never placed, placed twice, or an alias that isn't an import, is a build error.
+- A `members` line in a `file library` starts C# for the library's class (fields, methods, a builder
+  class), up to the next `section` line. The file runs after the app does, so section code (eg
+  `if (Settings.FromSpi) { ... }`) sees whatever the app set. `library Namespace.Class;` after the
+  `file library` line names the class.
 - A C# library (`library X;`) adds sections from `Initialise()`:
   `Section.Get("code").Add(Owner, Proc);`. Keep `Initialise()` free of output.
 - Every library's `Initialise()` runs once per build, after the libraries it imports, so a library
