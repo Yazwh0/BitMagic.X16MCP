@@ -171,14 +171,54 @@ for (var page = 0; page < 4; page++)
 
 | Form | Meaning |
 | --- | --- |
-| `library Namespace.Class;` | Marks the file as a library (methods only, no body) that others `import`. |
-| `import Name = "file";` | Builds `file` as a template and exposes it as `Name.Method(...)`. |
-| `include "file.cs";` | Adds a plain C# source file, compiled alongside the template (no `Name.`/`@`). |
+| `library Namespace.Class;` | Marks the file as a C# library (methods only, no body) that others `import`. |
+| `file library [section]` | First line of a library written in plain bmasm, split into sections. See below. |
+| `import Name = "file"` | Builds `file` as a template and exposes it as `Name.Method(...)`. The `;` is optional. |
+| `include "file.cs"` | Adds a plain C# source file, compiled alongside the template (no `Name.`/`@`). The `;` is optional. |
 | `using Some.Namespace;` | C# `using`, header-only. |
 | `reference Some.Assembly;` | Adds a .NET assembly by name (already resolvable). |
 | `assembly "path/to/lib.dll";` | Adds an assembly from a file. |
 | `nuget "Package.Id", "1.2.3";` | Downloads and adds a NuGet package's assemblies. |
 | `!directive` | Runs `.directive` in the setup phase, before the body — e.g. `!segment Foo $a000` to define layout up front. |
+
+### Libraries in plain bmasm: sections and `place`
+
+A library can be plain bmasm, with no C#. Its first line is `file library`, and its code is split
+into named sections with `section` lines (no `.`: like `import`, these are read by the template
+engine, not the assembler):
+
+```text
+; text.bmasm
+file library                ; or 'file library code' to start in code, with no 'section' line
+
+section setup               ; declarations: segments, variables, constants
+.scope text
+    .const RETURN 13
+.endscope
+
+section code                ; procedures
+.scope text
+    .proc print
+        ...
+    .endproc
+.endscope
+```
+
+- Every asm line must be in a section; asm before the first `section` is an error.
+- By default every library's `setup` is written before the main file's code (so declarations
+  only: it lands ahead of `BM.X16Header()`), and every library's `code` after it.
+- `place <section>` writes a section at that point, in any file: `place setup`, `place code`.
+- `place <alias>.<section>` places one library's part, where the alias is its import name, eg
+  `place Dos.code` inside a RAM bank segment. `place code` then takes everything not placed
+  elsewhere, in any order. To place a library you don't import directly, import it too.
+- Any section name works (`section irq` + `place irq`); only `setup` and `code` have defaults.
+  Code that's never placed, placed twice, or an alias that isn't an import, is a build error.
+- A C# library (`library X;`) adds sections from `Initialise()`:
+  `Section.Get("code").Add(Owner, Proc);`. Keep `Initialise()` free of output.
+- Every library's `Initialise()` runs once per build, after the libraries it imports, so a library
+  must never register an imported library's code itself (it would be written twice).
+- `file <kind>` in general hands the file to the view `<kind>.bmasm` (a library with
+  `public static void Process(ViewFile file)`); `file library` is the shipped `library.bmasm`.
 
 ### The BM library (`import BM="bm.bmasm";`)
 
