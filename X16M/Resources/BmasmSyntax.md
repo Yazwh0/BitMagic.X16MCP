@@ -42,7 +42,8 @@ Parameters are positional (in the order below) or `name=value`; `_` skips a posi
 
 | Directive | Parameters | What it does |
 | --- | --- | --- |
-| `.segment name [address] [maxsize] [filename] [scope]` | | Opens/switches to a named memory region. Re-naming an existing segment switches to it. |
+| `.segment name [address] [maxsize] [filename] [scope]` | | Opens/switches to a named memory region. Re-naming an existing segment switches to it. `scope` only applies to this switch (else `Main`); the segment doesn't keep it. |
+| `.segmentdefine name [address] [maxsize] [filename]` | | Defines/updates a segment like `.segment`, without switching to it. A `scope` is an error. |
 | `.endsegment` | | Back to the `Main` segment/scope. |
 | `.scope [public|private] [name]` | | Opens a named constant scope (flat, doesn't nest; omit `name` for anonymous). `private` makes names declared in it private by default; set by the first `.scope` for the name, reopening with the other keyword is an error. |
 | `.endscope` | | Back to the enclosing procedure's scope. |
@@ -179,7 +180,7 @@ for (var page = 0; page < 4; page++)
 | `reference Some.Assembly;` | Adds a .NET assembly by name (already resolvable). |
 | `assembly "path/to/lib.dll";` | Adds an assembly from a file. |
 | `nuget "Package.Id", "1.2.3";` | Downloads and adds a NuGet package's assemblies. |
-| `!directive` | Runs `.directive` in the setup phase, before the body — e.g. `!segment Foo $a000` to define layout up front. |
+| `!directive` | Runs `.directive` in the setup phase, before the body — e.g. `!segment Foo $a000` to define layout up front. `!segment` becomes `.segmentdefine`, so it doesn't switch segment. |
 
 ### Libraries in plain bmasm: sections and `place`
 
