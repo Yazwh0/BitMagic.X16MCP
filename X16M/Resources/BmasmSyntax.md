@@ -48,6 +48,7 @@ Parameters are positional (in the order below) or `name=value`; `_` skips a posi
 | `.scope [public|private] [name]` | | Opens a named constant scope (flat, doesn't nest; omit `name` for anonymous). `private` makes names declared in it private by default; set by the first `.scope` for the name, reopening with the other keyword is an error. |
 | `.endscope` | | Back to the enclosing procedure's scope. |
 | `.proc [public|private] [name]` | | Named block with its own scope + an entry-point constant (`jmp myproc` works). Nestable. |
+| `.entry` | | Moves the proc's entry point (its name) to this line, eg after `.padvar`s. Code above it can only be fallen into. Once per proc. |
 | `.endproc` | | Closes the proc; adds `endproc` pointing just past its code. |
 | `.const [public|private] name value` | | Named constant. |
 | `.var [public|private] type name [value]` | | Typed data: reserves space **and writes** the initial value (default `0`). |
