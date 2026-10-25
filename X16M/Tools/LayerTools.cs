@@ -30,4 +30,16 @@ public static class LayerTools
 
         return result;
     }
+
+    [McpServerTool(Name = "get_screen", ReadOnly = true, Destructive = false, Idempotent = true)]
+    [Description("Returns the current VERA display as a single 640x480 image, with all six layers blended together the way the X16E window shows them. Use get_layers to see what each layer contributes. Rendered from whatever the display buffer currently holds: while paused mid-frame this can be a partial/torn image rather than a complete one, since the beam only advances alongside executed CPU cycles.")]
+    public static async Task<CallToolResult> GetScreen(DapSession session)
+    {
+        var response = await session.GetScreen();
+        var result = new CallToolResult();
+
+        result.Content.Add(ImageContentBlock.FromBytes(Convert.FromBase64String(response.Display), "image/png"));
+
+        return result;
+    }
 }

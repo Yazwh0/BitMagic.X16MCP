@@ -29,3 +29,26 @@ public sealed class LayerRequestResponse : ResponseBody
 {
     public List<string> Display { get; set; } = new();
 }
+
+/// <summary>
+/// Client-side mirror of X16D's "getScreen" custom DAP request, in the same file as getLayers.
+/// </summary>
+internal sealed class ScreenRequest : DebugRequestWithResponse<ScreenRequestArguments, ScreenRequestResponse>
+{
+    public ScreenRequest() : base("getScreen")
+    {
+    }
+}
+
+internal sealed class ScreenRequestArguments : DebugRequestArguments
+{
+}
+
+/// <summary>
+/// One 640x480 PNG, base64-encoded: the six getLayers images blended together in compositing
+/// order, as X16E's window shows them. Has the same partial/torn frame caveat as getLayers.
+/// </summary>
+public sealed class ScreenRequestResponse : ResponseBody
+{
+    public string Display { get; set; } = "";
+}

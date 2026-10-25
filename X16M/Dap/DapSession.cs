@@ -745,6 +745,12 @@ public sealed class DapSession : IDisposable
         return _host!.SendRequestSync(new LayerRequest());
     }
 
+    public async Task<ScreenRequestResponse> GetScreen()
+    {
+        await EnsureSessionAsync();
+        return _host!.SendRequestSync(new ScreenRequest());
+    }
+
     public async Task<SpriteRequestResponse> GetSprites()
     {
         await EnsureSessionAsync();
