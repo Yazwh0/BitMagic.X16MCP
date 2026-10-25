@@ -85,10 +85,10 @@ public static class BreakpointTools
     }
 
     [McpServerTool(Name = "set_hardware_breakpoints", ReadOnly = false, Destructive = false, Idempotent = true)]
-    [Description("Sets X16 hardware breakpoints, replacing any previously set this way. Wraps DAP's setFunctionBreakpoints, but X16D repurposes it for VRAM/VSync rather than named functions - there's no \"break when this proc is called\" here, source breakpoints (set_breakpoints) already cover that better anyway. Each entry is a small expression: \"vram(address)\" breaks on any VRAM read or write at that address; \"vram(address, \\\"R\\\")\" or \"vram(address, \\\"W\\\")\" restricts to reads or writes only; \"vram(start, end)\" or \"vram(start, end, \\\"R\\\"/\\\"W\\\")\" covers a range. \"vsync()\" breaks on every frame's vertical sync; \"vsync(frameNumber)\" breaks once, on that specific frame.")]
+    [Description("Sets X16 hardware breakpoints, replacing any previously set this way. Wraps DAP's setFunctionBreakpoints, but X16D repurposes it for VRAM/VSync rather than named functions - there's no \"break when this proc is called\" here, source breakpoints (set_breakpoints) already cover that better anyway. Each entry is a small expression: \"vram(address)\" breaks on any VRAM read or write at that address; \"vram(address, \\\"R\\\")\" or \"vram(address, \\\"W\\\")\" restricts to reads or writes only; \"vram(start, end)\" or \"vram(start, end, \\\"R\\\"/\\\"W\\\")\" covers a range. \"vsync()\" breaks on every frame's vertical sync; \"vsync(frameNumber)\" breaks once, on that specific frame. \"beam(x, y)\" breaks every frame when the VERA beam reaches that point, and \"line(y)\" is the same as \"beam(0, y)\". Beam coordinates cover the full 800x525 scan (x 0-799, y 0-524), not the display mode's scaled resolution: the visible area is x 0-639, y 0-479, the rest is blanking. The stop lands on the first instruction boundary at or after that point, so the beam may be a few pixels past it; get_variables shows the exact Beam X/Y. At most 32 distinct beam positions can be set.")]
     public static async Task<string> SetHardwareBreakpoints(
         DapSession session,
-        [Description("Expressions to set, e.g. [\"vram(0x1B000)\", \"vsync(120)\"]. Empty array clears all of them.")] string[] expressions)
+        [Description("Expressions to set, e.g. [\"vram(0x1B000)\", \"vsync(120)\", \"line(240)\", \"beam(320, 100)\"]. Empty array clears all of them.")] string[] expressions)
     {
         var breakpoints = await session.SetHardwareBreakpoints(expressions);
 

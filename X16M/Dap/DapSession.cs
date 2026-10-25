@@ -536,7 +536,7 @@ public sealed class DapSession : IDisposable
     }
 
     // DAP's setFunctionBreakpoints, repurposed server-side (BreakpointManager.HandleFunctionBreakpointsRequest)
-    // for X16 hardware breakpoints (vram(...)/vsync(...) expressions) rather than named functions.
+    // for X16 hardware breakpoints (vram(...)/vsync(...)/beam(...)/line(...) expressions) rather than named functions.
     public async Task<IReadOnlyList<Breakpoint>> SetHardwareBreakpoints(IReadOnlyList<string> expressions)
     {
         await EnsureSessionAsync();
