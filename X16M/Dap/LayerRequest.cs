@@ -42,6 +42,9 @@ internal sealed class ScreenRequest : DebugRequestWithResponse<ScreenRequestArgu
 
 internal sealed class ScreenRequestArguments : DebugRequestArguments
 {
+    public string? RenderMode { get; set; } // beam, finishFrame or fromState
+    public int? RenderToX { get; set; } // preview to this beam position while paused
+    public int? RenderToY { get; set; }
 }
 
 /// <summary>
@@ -51,4 +54,5 @@ internal sealed class ScreenRequestArguments : DebugRequestArguments
 public sealed class ScreenRequestResponse : ResponseBody
 {
     public string Display { get; set; } = "";
+    public string RenderMode { get; set; } = "beam"; // what was used, beam while running, preview for RenderToX, RenderToY
 }

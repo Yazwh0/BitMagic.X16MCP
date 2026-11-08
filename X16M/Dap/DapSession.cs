@@ -745,10 +745,14 @@ public sealed class DapSession : IDisposable
         return _host!.SendRequestSync(new LayerRequest());
     }
 
-    public async Task<ScreenRequestResponse> GetScreen()
+    public async Task<ScreenRequestResponse> GetScreen(string? renderMode = null, int? renderToX = null, int? renderToY = null)
     {
         await EnsureSessionAsync();
-        return _host!.SendRequestSync(new ScreenRequest());
+        var request = new ScreenRequest();
+        request.Args.RenderMode = renderMode;
+        request.Args.RenderToX = renderToX;
+        request.Args.RenderToY = renderToY;
+        return _host!.SendRequestSync(request);
     }
 
     public async Task<SpriteRequestResponse> GetSprites()
@@ -762,6 +766,95 @@ public sealed class DapSession : IDisposable
     {
         await EnsureSessionAsync();
         return _host!.SendRequestSync(new HistoryRequest());
+    }
+
+    // Taking a snapshot doesn't change the program, so like reading memory it's available in both
+    // spawn/launch and attach mode. X16D takes it at the next instruction if the target's running.
+    public async Task<SnapshotRequestResponse> TakeSnapshot()
+    {
+        await EnsureSessionAsync();
+        return _host!.SendRequestSync(new TakeSnapshotRequest());
+    }
+
+    public async Task<GetSnapshotsRequestResponse> GetSnapshots()
+    {
+        await EnsureSessionAsync();
+        return _host!.SendRequestSync(new GetSnapshotsRequest());
+    }
+
+    public async Task<SnapshotRequestResponse> DeleteSnapshot(int id)
+    {
+        await EnsureSessionAsync();
+
+        var request = new DeleteSnapshotRequest();
+        request.Args.Id = id;
+
+        return _host!.SendRequestSync(request);
+    }
+
+    public async Task<SnapshotRequestResponse> RenameSnapshot(int id, string name)
+    {
+        await EnsureSessionAsync();
+
+        var request = new RenameSnapshotRequest();
+        request.Args.Id = id;
+        request.Args.Name = name;
+
+        return _host!.SendRequestSync(request);
+    }
+
+    // Restoring moves the program and sends a stop, so it's control flow like Continue/Step - not
+    // available while attached. X16D needs the target paused, so if it's running it's paused first.
+    // Waits for the stop X16D sends on success.
+    public async Task<(SnapshotRequestResponse Response, StopOutcome? Stop)> RestoreSnapshot(int id, TimeSpan? timeout = null)
+    {
+        await EnsureSessionAsync();
+        RequireNotAttached("restore_snapshot");
+
+        await _stepLock.WaitAsync();
+        try
+        {
+            if (Terminated)
+                throw new McpException("The target has already terminated. Call launch_project to start a new session.");
+
+            var (response, stop) = await SendRestore(id, timeout);
+
+            if (!response.Success && response.Running)
+            {
+                var pending = new TaskCompletionSource<StopOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
+                _pendingStop = pending;
+                _host!.SendRequestSync(new PauseRequest(1));
+
+                var paused = await WaitWithTimeout(pending.Task, timeout ?? DefaultTimeout);
+                if (paused.Terminated)
+                    return (response, paused);
+
+                (response, stop) = await SendRestore(id, timeout);
+            }
+
+            return (response, stop);
+        }
+        finally
+        {
+            _stepLock.Release();
+        }
+    }
+
+    // only call while holding _stepLock
+    private async Task<(SnapshotRequestResponse Response, StopOutcome? Stop)> SendRestore(int id, TimeSpan? timeout)
+    {
+        var tcs = new TaskCompletionSource<StopOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _pendingStop = tcs;
+
+        var request = new RestoreSnapshotRequest();
+        request.Args.Id = id;
+
+        var response = _host!.SendRequestSync(request);
+
+        if (!response.Success)
+            return (response, null);
+
+        return (response, await WaitWithTimeout(tcs.Task, timeout ?? DefaultTimeout));
     }
 
     public void Disconnect()

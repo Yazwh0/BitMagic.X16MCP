@@ -58,7 +58,7 @@ internal static class Program
                 "an explicit attach_to_session) joins a session VSCode already launched and owns - " +
                 "stepping, breakpoints, continue, and disconnect stay with VSCode (or its own chat " +
                 "integration); this server's tools there are only for reading and amending " +
-                "X16-specific state (memory, sprites, palette, layers, CPU history), not for " +
+                "X16-specific state (memory, sprites, palette, layers, CPU history, taking snapshots), not for " +
                 "driving execution - those calls fail with a clear error explaining that. The two " +
                 "modes are mutually exclusive per session - call disconnect before switching. " +
                 "build_project is the one exception to all of the above: it just compiles a " +
