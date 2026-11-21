@@ -8,7 +8,7 @@ namespace X16M;
 
 internal sealed class Options
 {
-    [Option("x16d", Default = "", Required = false, HelpText = "Path to X16D.exe to spawn. Falls back to the X16D_PATH environment variable.")]
+    [Option("x16d", Default = "", Required = false, HelpText = "Path to an X16D executable to spawn instead of the one bundled with X16M. Falls back to the X16D_PATH environment variable, then the bundled X16D.")]
     public string X16DPath { get; set; } = "";
 
     [Option("x16d-host", Default = "", Required = false, HelpText = "Host of an X16D already running with --dapport, to connect to instead of spawning one. Falls back to the X16D_HOST environment variable.")]
@@ -96,13 +96,11 @@ internal static class Program
             return new X16DConnection.Tcp(host, port);
         }
 
-        var exeDir = Path.GetDirectoryName(Environment.ProcessPath) ?? AppContext.BaseDirectory;
-        var bundledX16DPath = Path.Combine(exeDir, "x16d", "X16D.exe");
+        var envX16DPath = Environment.GetEnvironmentVariable(X16DPathEnvironmentVariable);
 
-        var x16dPath = !string.IsNullOrWhiteSpace(options.X16DPath)
-            ? options.X16DPath
-            : Environment.GetEnvironmentVariable(X16DPathEnvironmentVariable)
-                ?? (File.Exists(bundledX16DPath) ? bundledX16DPath : "");
+        var x16dPath = !string.IsNullOrWhiteSpace(options.X16DPath) ? options.X16DPath
+            : !string.IsNullOrWhiteSpace(envX16DPath) ? envX16DPath
+            : FindBundledX16D() ?? "";
 
         if (string.IsNullOrWhiteSpace(x16dPath))
         {
@@ -112,5 +110,34 @@ internal static class Program
         }
 
         return new X16DConnection.Spawn(x16dPath);
+    }
+
+    // The X16D that ships with X16M, in x16d/ next to it: the release archives and the
+    // per-RID .NET tool packages both put it there. AppContext.BaseDirectory rather than
+    // the process path, as that's dotnet itself when run as 'dotnet X16M.dll'.
+    private static string? FindBundledX16D()
+    {
+        var path = Path.Combine(AppContext.BaseDirectory, "x16d", OperatingSystem.IsWindows() ? "X16D.exe" : "X16D");
+        if (!File.Exists(path))
+            return null;
+
+        // NuGet doesn't keep Unix file permissions, so in the Linux tool package X16D arrives
+        // without its executable bit. Put it back, or spawning it fails with 'permission denied'.
+        if (!OperatingSystem.IsWindows())
+        {
+            try
+            {
+                var mode = File.GetUnixFileMode(path);
+                const UnixFileMode execute = UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute;
+                if ((mode & UnixFileMode.UserExecute) == 0)
+                    File.SetUnixFileMode(path, mode | execute);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                Console.Error.WriteLine($"X16M: couldn't make the bundled X16D executable ({ex.Message}). Run: chmod +x \"{path}\"");
+            }
+        }
+
+        return path;
     }
 }

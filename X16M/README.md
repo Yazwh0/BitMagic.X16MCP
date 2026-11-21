@@ -26,6 +26,10 @@ This bundles a matching build of `X16D` for your platform, Windows or Linux, so 
 else to configure beyond a [ROM](https://bitmagic.org/emulator/rom). For an early build, add
 `--prerelease`.
 
+On Linux, the bundled `X16D` needs glibc 2.34 or later (Ubuntu 22.04, Debian 12 or newer),
+OpenAL, OpenGL and an X11 or Wayland display; see the
+[Linux prerequisites](https://bitmagic.org/debugger/#linux-prerequisites) for the full list.
+
 A .NET tool doesn't auto-update. To pick up a newer version later, run:
 
 ```bash
@@ -34,9 +38,26 @@ dotnet tool update -g BitMagic.X16M
 
 ## A ROM
 
-Place it as `rom.bin` next to the bundled `X16D`, or point the `BITMAGIC_ROM` environment
-variable at the file (or the folder containing it). Without one, `launch_project` returns a
-clear warning rather than failing silently.
+The X16 ROM contains licensed code, so it isn't included; X16M can fetch one for you. Its
+`fetch_rom` tool downloads the latest release from the official
+[x16-rom repository](https://github.com/X16Community/x16-rom) and saves `rom.bin` to your
+BitMagic folder: `%LOCALAPPDATA%\BitMagic` on Windows, `~/.local/share/BitMagic` on Linux.
+`launch_project` uses a ROM there automatically, so just ask your agent to fetch one. It needs
+`curl` and `tar` on Windows (both ship with Windows 10 1803 and later), or `curl` and `unzip`
+on Linux.
+
+The same scripts sit next to `X16M` as `fetch-rom.bat` and `fetch-rom.sh` if you'd rather run
+them yourself; pass a folder as the first argument to save `rom.bin` somewhere else.
+
+`launch_project` looks for a ROM in this order:
+
+1. a `romFile` set in the project file
+2. `rom.bin` next to the bundled `X16D`
+3. the `BITMAGIC_ROM` environment variable, either the file or the folder containing it
+4. your BitMagic folder
+
+Without one, `launch_project` returns a clear warning suggesting `fetch_rom`, rather than
+failing silently.
 
 ## Registering it with an MCP client
 
@@ -78,9 +99,9 @@ Standard DAP is covered, plus X16-specific tools for VERA layers, sprites and CP
 
 | Tool | Description |
 | ---- | ----------- |
-| `launch_project(projectPath, breakpoints?, stopOnEntry?, muteAudio?)` | Launches a project's `.json` file, or a `.bmasm` file directly, and waits for its initial stop before returning. Pass `breakpoints` here rather than a follow-up `set_breakpoints` call: some targets finish in well under a second, faster than a separate tool call can land. Audio is muted by default (`muteAudio: true`); this only silences the output, emulation is unaffected. |
+| `launch_project(projectPath, breakpoints?, stopOnEntry?, muteAudio?, workspaceFolder?)` | Launches a project's `.json` file, or a `.bmasm` file directly, and waits for its initial stop before returning. Pass `breakpoints` here rather than a follow-up `set_breakpoints` call: some targets finish in well under a second, faster than a separate tool call can land. Audio is muted by default (`muteAudio: true`); this only silences the output, emulation is unaffected. Relative paths in the project file resolve as they do in VSCode, against the nearest folder above it with a `.vscode` folder (else its own folder); `workspaceFolder` overrides that. |
 | `set_breakpoints(file, lines[])` | Sets the full set of breakpoints for a file, replacing any previously set there. |
-| `get_breakpoints()` | Reports the current verification state of every breakpoint set so far. `X16D` verifies a breakpoint once its file actually loads, which can happen after `set_breakpoints` or `launch_project` already returned. |
+| `get_breakpoints()` | Reports every breakpoint set this session, source, instruction and hardware, and whether each is verified. `X16D` verifies a breakpoint once the code it's for loads, which can happen after `set_breakpoints` or `launch_project` already returned. |
 | `continue_execution()` | Resumes a paused session. |
 | `step_over()` | Steps over the current line. |
 | `step_into()` | Steps into a call on the current line. |
@@ -93,6 +114,7 @@ Standard DAP is covered, plus X16-specific tools for VERA layers, sprites and CP
 | `get_sprites()` | Returns each sprite VERA currently has enabled (depth != 0), with its attributes and its own cropped image. VERA has a fixed table of 128 sprite slots; disabled ones are omitted rather than returned as 128 mostly-empty entries. |
 | `get_cpu_history(count?)` | Returns the most recently executed CPU instructions, most recent first, with register state, flags and source file/line where known. Useful for seeing how execution actually reached the current stop, not just where it is now. |
 | `disconnect()` | Ends the debug session. |
+| `fetch_rom(destinationFolder?)` | Downloads the latest X16 ROM to your BitMagic folder (or `destinationFolder`), overwriting any `rom.bin` already there. Doesn't need a debug session. |
 
 ## Example
 

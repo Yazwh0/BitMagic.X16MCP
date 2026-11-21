@@ -26,7 +26,9 @@ X16M needs to know how to reach X16D. It resolves this in order:
    already running with `--dapport`. X16M doesn't own its lifetime: disconnecting closes the
    socket but leaves X16D running.
 2. `--x16d <path-to-X16D.exe>` (or `X16D_PATH`): spawn X16D as a child process.
-3. a bundled copy at `x16d/X16D.exe` next to `X16M`'s own executable (see "Bundling" below).
+3. a bundled copy at `x16d/X16D.exe` (`x16d/X16D` on Linux) next to `X16M`'s own assembly (see
+   "Bundling" below). This is what an installed X16M uses, so normally nothing needs setting. On
+   Linux, X16M restores its executable bit if needed, since NuGet doesn't preserve it.
 
 For local development, build `BitMagic.X16Debugger/X16D` yourself (Debug is fine).
 `Properties/launchSettings.json` has profiles for both modes:
@@ -42,9 +44,15 @@ dotnet run --project BitMagic.X16MCP/X16M -- --x16d <path-to-X16D.exe>
 dotnet run --project BitMagic.X16MCP/X16M -- --x16d-host localhost --x16d-port 2563
 ```
 
-Note: `X16D.exe` needs `EmulatorCore.dll` alongside it and a `rom.bin` reachable per
-`BitMagic.X16Debugger`'s own build/run instructions (see `BitMagic.X16Emulator/X16E/fetch-rom.sh`
-/ `fetch-rom.bat` for fetching a ROM).
+Note: `X16D.exe` needs `EmulatorCore.dll` alongside it and a reachable `rom.bin`. The
+`fetch_rom` tool fetches one into the user's BitMagic folder (`%LOCALAPPDATA%\BitMagic`,
+`~/.local/share/BitMagic`). X16D doesn't look there itself, so when X16M spawns X16D and it
+wouldn't otherwise find a ROM, X16M passes that one in via `BITMAGIC_ROM` (see `Rom/RomLocator.cs`).
+
+The fetch scripts themselves live in `BitMagic.X16Emulator/X16E/` (`fetch-rom.bat`,
+`fetch-rom.sh`). `X16M.csproj` links them in so they're copied next to `X16M.exe` and packed
+into the tool packages; that only works when building inside the BitMagic superproject, and a
+standalone clone builds without them.
 
 ## Bundling
 

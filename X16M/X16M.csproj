@@ -23,6 +23,17 @@
   </ItemGroup>
 
   <!--
+    The ROM fetch scripts live with X16E (one copy, maintained there) and are bundled next to
+    X16M.exe for the fetch_rom tool (see Rom/RomLocator.cs). CopyToPublishDirectory gets them
+    into the per-RID tool packages too, since PackAsTool packs the publish output. Conditional
+    so a standalone clone of this repo, outside the BitMagic superproject, still builds.
+  -->
+  <ItemGroup Condition="Exists('../../BitMagic.X16Emulator/X16E/fetch-rom.sh')">
+    <Content Include="../../BitMagic.X16Emulator/X16E/fetch-rom.bat" Link="fetch-rom.bat" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" Pack="false" />
+    <Content Include="../../BitMagic.X16Emulator/X16E/fetch-rom.sh" Link="fetch-rom.sh" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" Pack="false" />
+  </ItemGroup>
+
+  <!--
     X16D isn't bundled by this project's build - locally it's pointed to via config
     (the X16D_PATH env var, or the "x16d" command line option; see Properties/launchSettings.json)
     so it can still be stepped into from Visual Studio without a copy step getting in the way.

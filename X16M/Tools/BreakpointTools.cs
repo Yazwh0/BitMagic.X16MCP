@@ -24,7 +24,7 @@ public static class BreakpointTools
     }
 
     [McpServerTool(Name = "get_breakpoints", ReadOnly = true, Destructive = false, Idempotent = true)]
-    [Description("Reports the current verification state of every breakpoint set so far. X16D verifies a breakpoint asynchronously once the file it belongs to actually loads, so a breakpoint that came back unverified from set_breakpoints may have since become verified.")]
+    [Description("Reports every breakpoint set this session (source, instruction and hardware) and its current verification state. X16D verifies a breakpoint asynchronously once the code it's for is loaded, so one that came back unverified from set_breakpoints or set_instruction_breakpoints may have since become verified. Instruction breakpoints are kept by address across a program load, and re-checked against the new code.")]
     public static string GetBreakpoints(DapSession session)
     {
         var breakpoints = session.GetKnownBreakpoints();
@@ -32,7 +32,36 @@ public static class BreakpointTools
         if (breakpoints.Count == 0)
             return "No breakpoints have been set.";
 
-        return Summarize(breakpoints, unverifiedSuffix: "");
+        return string.Join(Environment.NewLine, breakpoints.Select(Describe));
+    }
+
+    internal static string Describe(KnownBreakpoint known)
+    {
+        var b = known.Breakpoint;
+        var where = known.Kind switch
+        {
+            BreakpointKind.Source => $"{Path.GetFileName(known.File)} line {b.Line}",
+            BreakpointKind.Instruction => $"instruction {FormatInstructionReference(b)}",
+            _ => "hardware",
+        };
+
+        // a hardware breakpoint's message is its description, eg which VRAM address it watches
+        if (known.Kind == BreakpointKind.Hardware)
+            return $"{where}: {(b.Verified ? "set" : "NOT set")}{(string.IsNullOrEmpty(b.Message) ? "" : $" - {b.Message}")}";
+
+        return b.Verified
+            ? $"{where}: verified"
+            : $"{where}: NOT verified{(string.IsNullOrEmpty(b.Message) ? "" : $" ({b.Message})")}";
+    }
+
+    // X16D's instruction references are bare hex debugger addresses, with the bank above the low 16 bits
+    private static string FormatInstructionReference(Breakpoint b)
+    {
+        if (!int.TryParse(b.InstructionReference, System.Globalization.NumberStyles.HexNumber, null, out var address))
+            return b.InstructionReference ?? "?";
+
+        address += b.Offset ?? 0;
+        return address > 0xffff ? $"${address >> 16:X2}:{address & 0xffff:X4}" : $"${address:X4}";
     }
 
     [McpServerTool(Name = "set_exception_breakpoints", ReadOnly = false, Destructive = false, Idempotent = true)]
@@ -77,11 +106,7 @@ public static class BreakpointTools
         if (breakpoints.Count == 0)
             return "No breakpoints were set.";
 
-        var summary = breakpoints.Select(b => b.Verified
-            ? $"0x{b.InstructionReference}: verified"
-            : $"0x{b.InstructionReference}: NOT verified{(string.IsNullOrEmpty(b.Message) ? "" : $" ({b.Message})")}");
-
-        return string.Join(Environment.NewLine, summary);
+        return string.Join(Environment.NewLine, breakpoints.Select(b => Describe(new KnownBreakpoint(BreakpointKind.Instruction, null, b))));
     }
 
     [McpServerTool(Name = "set_hardware_breakpoints", ReadOnly = false, Destructive = false, Idempotent = true)]

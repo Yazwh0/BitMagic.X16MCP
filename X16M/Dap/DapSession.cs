@@ -4,6 +4,7 @@ using Microsoft.VisualStudio.Shared.VSCodeDebugProtocol;
 using Microsoft.VisualStudio.Shared.VSCodeDebugProtocol.Messages;
 using ModelContextProtocol;
 using Newtonsoft.Json.Linq;
+using X16M.Rom;
 using Thread = System.Threading.Thread;
 
 namespace X16M.Dap;
@@ -22,6 +23,11 @@ public sealed record StopOutcome(bool Terminated, StoppedEvent? Stopped)
 
 /// <summary>One file's worth of breakpoints to request, e.g. as part of <see cref="DapSession.Launch"/>.</summary>
 public sealed record BreakpointSpec(string File, IReadOnlyList<int> Lines);
+
+public enum BreakpointKind { Source, Instruction, Hardware }
+
+/// <summary>A breakpoint as last reported by X16D. <see cref="File"/> is set for source breakpoints.</summary>
+public sealed record KnownBreakpoint(BreakpointKind Kind, string? File, Breakpoint Breakpoint);
 
 /// <summary>Result of <see cref="DapSession.Launch"/>, plus a best-effort warning if no ROM looked reachable.</summary>
 public sealed record LaunchOutcome(StopOutcome Stop, IReadOnlyList<Breakpoint> InitialBreakpoints, string? RomWarning);
@@ -73,10 +79,15 @@ public sealed class DapSession : IDisposable
     // Last error-severity OutputEvent from X16D, e.g. "*** Rom file not found: rom.bin".
     private string? _lastErrorOutput;
 
-    // Latest known verification state per breakpoint id, kept current by OnBreakpointEvent so a
-    // caller can see whether a breakpoint has since become verified without re-sending
-    // set_breakpoints.
-    private readonly Dictionary<int, Breakpoint> _breakpointsById = new();
+    // Every breakpoint set this session, grouped the way the set_* calls replace them: source
+    // breakpoints per file, plus one group each for instruction and hardware breakpoints. So a
+    // set_* call drops the ones it replaces, rather than leaving them listed forever. Kept current
+    // by OnBreakpointEvent (matched by id), so a caller can see whether a breakpoint has since
+    // become verified without re-sending it. Locked, as events arrive on the DAP thread.
+    private readonly Dictionary<string, List<Breakpoint>> _breakpointGroups = new();
+    private const string InstructionGroup = "instruction";
+    private const string HardwareGroup = "hardware";
+    private const string FileGroupPrefix = "file:";
 
     // A live MCP session's stderr isn't something a user can easily get to, so DAP traffic is
     // also written to a log file next to the executable (not the process's working directory,
@@ -200,6 +211,7 @@ public sealed class DapSession : IDisposable
             Terminated = false;
             LastStop = null;
             _lastErrorOutput = null;
+            ClearKnownBreakpoints();
 
             _host.SendRequestSync(new InitializeRequest("x16m"));
         }
@@ -216,7 +228,7 @@ public sealed class DapSession : IDisposable
         }
     }
 
-    public async Task<LaunchOutcome> Launch(string projectPath, IReadOnlyList<BreakpointSpec>? initialBreakpoints = null, string? workingDirectory = null, bool stopOnEntry = true, bool muteAudio = true)
+    public async Task<LaunchOutcome> Launch(string projectPath, IReadOnlyList<BreakpointSpec>? initialBreakpoints = null, string? workingDirectory = null, bool stopOnEntry = true, bool muteAudio = true, string? workspaceFolder = null)
     {
         var launchCompletion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var initialBreakpointResults = new List<Breakpoint>();
@@ -228,7 +240,7 @@ public sealed class DapSession : IDisposable
                 throw new McpException("A debug session is already running. Call disconnect first.");
 
             if (_connection is null)
-                throw new McpException("X16M was started with no X16D configured (--x16d/--x16d-host). Restart it with one, or use attach_to_session instead.");
+                throw new McpException("X16M has no X16D to launch: the one bundled with it wasn't found, and neither --x16d/X16D_PATH nor --x16d-host/--x16d-port was given. Reinstall X16M, or restart it with --x16d pointing at an X16D executable. attach_to_session still works without one.");
 
             if (!File.Exists(projectPath))
                 throw new McpException($"Project file not found at '{projectPath}'.");
@@ -297,7 +309,12 @@ public sealed class DapSession : IDisposable
             Terminated = false;
             LastStop = null;
             _lastErrorOutput = null;
+            ClearKnownBreakpoints();
             _projectDirectory = Path.GetDirectoryName(Path.GetFullPath(projectPath)) ?? "";
+            var cwd = string.IsNullOrWhiteSpace(workspaceFolder)
+                ? FindWorkspaceFolder(projectPath)
+                : Path.GetFullPath(workspaceFolder);
+            Log($"Workspace folder (launch cwd): {cwd}");
 
             _host.SendRequestSync(new InitializeRequest("x16m"));
 
@@ -307,7 +324,9 @@ public sealed class DapSession : IDisposable
                 ConfigurationProperties = new Dictionary<string, JToken?>
                 {
                     ["program"] = projectPath,
-                    ["cwd"] = _projectDirectory,
+                    // What VS Code would send as ${workspaceRoot}: a project's basePath defaults
+                    // to it, and a relative basePath resolves against it.
+                    ["cwd"] = cwd,
                     ["stopOnEntry"] = stopOnEntry,
                     // X16D otherwise takes stepping from the project file's startStepping, the caller's choice must win.
                     ["stopOnEntryOverride"] = stopOnEntry,
@@ -370,6 +389,30 @@ public sealed class DapSession : IDisposable
     }
 
     /// <summary>
+    /// The folder VS Code would have open for this project, so a project file behaves the same
+    /// through X16M as it does there: the nearest folder at or above the project file holding a
+    /// .vscode folder, or the project file's own folder if there isn't one. Stops short of the
+    /// user's home folder, as VS Code keeps its own settings in ~/.vscode.
+    /// </summary>
+    public static string FindWorkspaceFolder(string projectPath)
+    {
+        var projectDirectory = Path.GetDirectoryName(Path.GetFullPath(projectPath)) ?? "";
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+
+        for (var dir = new DirectoryInfo(projectDirectory); dir != null; dir = dir.Parent)
+        {
+            if (!string.IsNullOrEmpty(home) && string.Equals(Path.TrimEndingDirectorySeparator(dir.FullName), Path.TrimEndingDirectorySeparator(home), comparison))
+                break;
+
+            if (Directory.Exists(Path.Combine(dir.FullName, ".vscode")))
+                return dir.FullName;
+        }
+
+        return projectDirectory;
+    }
+
+    /// <summary>
     /// Runs `X16D --buildOnly` as a one-shot child process to compile a project (.json) or a
     /// single .bmasm/.asm source file, then exits - no ROM load, no DAP handshake, nothing run.
     /// outputFolder is where the compiled program (.prg etc) is written; binFolder is just the
@@ -380,7 +423,9 @@ public sealed class DapSession : IDisposable
     public async Task<(int ExitCode, string Output)> Build(string target, string? buildFolder = null, string? outputFolder = null, string? binFolder = null)
     {
         if (_connection is not X16DConnection.Spawn spawn)
-            throw new McpException("build_project needs X16M to be configured with --x16d/X16D_PATH (a local X16D.exe to spawn) - it can't run over a TCP connection to an already-running X16D.");
+            throw new McpException(_connection is X16DConnection.Tcp
+                ? "build_project needs a local X16D to spawn, so it can't run while X16M is set to connect to an already-running X16D (--x16d-host/--x16d-port)."
+                : "build_project needs a local X16D to spawn, but the one bundled with X16M wasn't found and no --x16d/X16D_PATH was given. Reinstall X16M, or restart it with --x16d pointing at an X16D executable.");
 
         if (!File.Exists(spawn.ExecutablePath))
             throw new McpException($"X16D executable not found at '{spawn.ExecutablePath}'.");
@@ -388,7 +433,13 @@ public sealed class DapSession : IDisposable
         if (!File.Exists(target))
             throw new McpException($"Build target not found at '{target}'.");
 
-        var folder = buildFolder ?? Path.GetDirectoryName(Path.GetFullPath(target)) ?? Environment.CurrentDirectory;
+        // A project file defaults to the same workspace folder launch_project uses, so its paths
+        // resolve the same way in both. A bare source file has no such paths, so its own folder.
+        var folder = buildFolder
+            ?? (string.Equals(Path.GetExtension(target), ".json", StringComparison.OrdinalIgnoreCase)
+                ? FindWorkspaceFolder(target)
+                : Path.GetDirectoryName(Path.GetFullPath(target)))
+            ?? Environment.CurrentDirectory;
 
         var psi = new ProcessStartInfo
         {
@@ -432,18 +483,14 @@ public sealed class DapSession : IDisposable
     private static string? CheckRomWarning(string x16dExecutablePath)
     {
         var x16dDirectory = Path.GetDirectoryName(Path.GetFullPath(x16dExecutablePath)) ?? "";
-        if (File.Exists(Path.Combine(x16dDirectory, "rom.bin")))
+        if (RomLocator.X16DFindsRomUnaided(x16dDirectory) || File.Exists(RomLocator.UserRomPath))
             return null;
 
-        var env = Environment.GetEnvironmentVariable("BITMAGIC_ROM");
-        if (!string.IsNullOrWhiteSpace(env) && (File.Exists(env) || File.Exists(Path.Combine(env, "rom.bin"))))
-            return null;
-
-        return "No X16 ROM found next to X16D, and the BITMAGIC_ROM environment variable isn't " +
-               "set to one either - launch will likely fail unless this project points at a ROM " +
-               "some other way. Download a ROM from the official Commander X16 releases and " +
-               "either place it as 'rom.bin' next to X16D, or set BITMAGIC_ROM to its file path " +
-               "(or the folder containing it).";
+        return "No X16 ROM found: there's no rom.bin next to X16D or in the user's BitMagic folder " +
+               $"('{RomLocator.UserRomFolder}'), and the BITMAGIC_ROM environment variable isn't set " +
+               "to one either. Launch will likely fail unless this project points at a ROM some other " +
+               "way (its romFile). Call fetch_rom to download the latest ROM into the BitMagic folder, " +
+               "then launch again.";
     }
 
     private (Stream input, Stream output) StartProcess(X16DConnection.Spawn spawn, string? workingDirectory)
@@ -461,6 +508,15 @@ public sealed class DapSession : IDisposable
             CreateNoWindow = true,
             WorkingDirectory = workingDirectory ?? Path.GetDirectoryName(Path.GetFullPath(spawn.ExecutablePath)) ?? Environment.CurrentDirectory,
         };
+
+        // X16D itself only looks in its working directory and BITMAGIC_ROM, not the user's
+        // BitMagic folder that fetch_rom (and X16E --fetch-rom) save to, so point it there.
+        var romForX16D = RomLocator.RomToPassToX16D(psi.WorkingDirectory);
+        if (romForX16D is not null)
+        {
+            psi.Environment[RomLocator.RomEnvironmentVariable] = romForX16D;
+            Log($"Passing ROM to X16D via {RomLocator.RomEnvironmentVariable}: {romForX16D}");
+        }
 
         var process = Process.Start(psi) ?? throw new McpException("Failed to start X16D.");
         _process = process;
@@ -532,6 +588,7 @@ public sealed class DapSession : IDisposable
 
         var request = new SetInstructionBreakpointsRequest(addresses.Select(a => new InstructionBreakpoint(a)).ToList());
         var response = _host!.SendRequestSync(request);
+        ReplaceBreakpointGroup(InstructionGroup, response.Breakpoints);
         return response.Breakpoints;
     }
 
@@ -544,6 +601,7 @@ public sealed class DapSession : IDisposable
 
         var request = new SetFunctionBreakpointsRequest(expressions.Select(e => new FunctionBreakpoint(e)).ToList());
         var response = _host!.SendRequestSync(request);
+        ReplaceBreakpointGroup(HardwareGroup, response.Breakpoints);
         return response.Breakpoints;
     }
 
@@ -591,13 +649,21 @@ public sealed class DapSession : IDisposable
         var request = new SetBreakpointsRequest(source) { Breakpoints = breakpoints };
         var response = _host!.SendRequestSync(request);
 
-        foreach (var breakpoint in response.Breakpoints)
-        {
-            if (breakpoint.Id.HasValue)
-                _breakpointsById[breakpoint.Id.Value] = breakpoint;
-        }
+        ReplaceBreakpointGroup(FileGroupPrefix + fullPath, response.Breakpoints);
 
         return response.Breakpoints;
+    }
+
+    private void ReplaceBreakpointGroup(string group, IEnumerable<Breakpoint> breakpoints)
+    {
+        lock (_breakpointGroups)
+            _breakpointGroups[group] = breakpoints.ToList();
+    }
+
+    private void ClearKnownBreakpoints()
+    {
+        lock (_breakpointGroups)
+            _breakpointGroups.Clear();
     }
 
     /// <summary>
@@ -606,7 +672,22 @@ public sealed class DapSession : IDisposable
     /// since become verified (X16D verifies a breakpoint once the file it belongs to actually
     /// loads, which can happen well after set_breakpoints returns).
     /// </summary>
-    public IReadOnlyList<Breakpoint> GetKnownBreakpoints() => _breakpointsById.Values.ToList();
+    public IReadOnlyList<KnownBreakpoint> GetKnownBreakpoints()
+    {
+        lock (_breakpointGroups)
+        {
+            return _breakpointGroups
+                .OrderBy(g => g.Key == InstructionGroup ? 1 : g.Key == HardwareGroup ? 2 : 0)
+                .ThenBy(g => g.Key, StringComparer.OrdinalIgnoreCase)
+                .SelectMany(g => g.Value.Select(b => g.Key switch
+                {
+                    InstructionGroup => new KnownBreakpoint(BreakpointKind.Instruction, null, b),
+                    HardwareGroup => new KnownBreakpoint(BreakpointKind.Hardware, null, b),
+                    _ => new KnownBreakpoint(BreakpointKind.Source, g.Key[FileGroupPrefix.Length..], b),
+                }))
+                .ToList();
+        }
+    }
 
     public Task<StopOutcome> ContinueAsync(int threadId = 1, TimeSpan? timeout = null)
         => SendAndWaitForStop(() => _host!.SendRequestSync(new ContinueRequest(threadId)), timeout);
@@ -929,8 +1010,28 @@ public sealed class DapSession : IDisposable
     private void OnBreakpointEvent(BreakpointEvent e)
     {
         var breakpoint = e.Breakpoint;
+
+        // Matched by id, as DAP specifies. One without an id, or that X16M didn't set (eg in a
+        // session it's attached to), isn't tracked.
         if (breakpoint.Id.HasValue)
-            _breakpointsById[breakpoint.Id.Value] = breakpoint;
+        {
+            lock (_breakpointGroups)
+            {
+                foreach (var group in _breakpointGroups.Values)
+                {
+                    var index = group.FindIndex(b => b.Id == breakpoint.Id);
+                    if (index == -1)
+                        continue;
+
+                    if (e.Reason == BreakpointEvent.ReasonValue.Removed)
+                        group.RemoveAt(index);
+                    else
+                        group[index] = breakpoint;
+
+                    break;
+                }
+            }
+        }
 
         Log($"[X16D:breakpoint] {e.Reason} - line {breakpoint.Line}: {(breakpoint.Verified ? "verified" : "NOT verified")}" +
             $"{(string.IsNullOrEmpty(breakpoint.Message) ? "" : $" ({breakpoint.Message})")}");
