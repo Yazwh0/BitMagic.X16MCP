@@ -228,7 +228,7 @@ public sealed class DapSession : IDisposable
         }
     }
 
-    public async Task<LaunchOutcome> Launch(string projectPath, IReadOnlyList<BreakpointSpec>? initialBreakpoints = null, string? workingDirectory = null, bool stopOnEntry = true, bool muteAudio = true, string? workspaceFolder = null)
+    public async Task<LaunchOutcome> Launch(string projectPath, IReadOnlyList<BreakpointSpec>? initialBreakpoints = null, string? workingDirectory = null, bool stopOnEntry = true, bool muteAudio = true, string? workspaceFolder = null, bool headless = false)
     {
         var launchCompletion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var initialBreakpointResults = new List<Breakpoint>();
@@ -245,6 +245,10 @@ public sealed class DapSession : IDisposable
             if (!File.Exists(projectPath))
                 throw new McpException($"Project file not found at '{projectPath}'.");
 
+            // --headless is an X16D command line option, so only applies to an X16D we start
+            if (headless && _connection is X16DConnection.Tcp headlessTcp)
+                throw new McpException($"headless only works when X16M starts X16D itself. The X16D at {headlessTcp.Host}:{headlessTcp.Port} was started separately, so start that one with --headless instead.");
+
             // Best-effort only (doesn't know project.json-level RomFile/EmulatorDirectory
             // overrides), so a miss is a warning, not a launch precondition.
             romWarning = _connection is X16DConnection.Spawn romCheckSpawn
@@ -260,7 +264,7 @@ public sealed class DapSession : IDisposable
 
             var (input, output) = _connection switch
             {
-                X16DConnection.Spawn spawn => StartProcess(spawn, workingDirectory),
+                X16DConnection.Spawn spawn => StartProcess(spawn, workingDirectory, headless),
                 X16DConnection.Tcp tcp => ConnectTcp(tcp),
                 _ => throw new McpException($"Unknown X16D connection type '{_connection.GetType()}'."),
             };
@@ -493,7 +497,7 @@ public sealed class DapSession : IDisposable
                "then launch again.";
     }
 
-    private (Stream input, Stream output) StartProcess(X16DConnection.Spawn spawn, string? workingDirectory)
+    private (Stream input, Stream output) StartProcess(X16DConnection.Spawn spawn, string? workingDirectory, bool headless)
     {
         if (!File.Exists(spawn.ExecutablePath))
             throw new McpException($"X16D executable not found at '{spawn.ExecutablePath}'.");
@@ -508,6 +512,10 @@ public sealed class DapSession : IDisposable
             CreateNoWindow = true,
             WorkingDirectory = workingDirectory ?? Path.GetDirectoryName(Path.GetFullPath(spawn.ExecutablePath)) ?? Environment.CurrentDirectory,
         };
+
+        // no emulator window, it still runs and renders so get_screen etc. work as normal
+        if (headless)
+            psi.ArgumentList.Add("--headless");
 
         // X16D itself only looks in its working directory and BITMAGIC_ROM, not the user's
         // BitMagic folder that fetch_rom (and X16E --fetch-rom) save to, so point it there.
